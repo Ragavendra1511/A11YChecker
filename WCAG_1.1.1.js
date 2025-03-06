@@ -254,25 +254,25 @@ function updateResults() {
 
     // Check functions
     function checkImgAlt() {
-        const images = document.querySelectorAll('img');
-        images.forEach(img => {
-            const altText = img.getAttribute('alt');
-            const role = img.getAttribute('role');
-            const ariaHidden = img.getAttribute('aria-hidden');
-            const displayStyle = window.getComputedStyle(img).display;
-            const zIndex = window.getComputedStyle(img).zIndex;
-            const src = img.getAttribute('src');
-    
-            // Check if the image is decorative, hidden, or not visible
-            if (altText === "" || role === "presentation" || ariaHidden === "true" || displayStyle === "none" || zIndex === "-1" || !src) {
-                logResult('inapplicable', 'Image is decorative or hidden', img);
-            } else if (altText && altText.trim() !== '') {
-                logResult('passed', 'Image has alt text: "' + altText + '"', img);
-            } else {
-                logResult('failed', 'Image missing alt text', img);
-            }
-        });
-    }
+    const images = document.querySelectorAll('img');
+    images.forEach(img => {
+        const altText = img.getAttribute('alt');
+        const role = img.getAttribute('role');
+        const ariaHidden = img.getAttribute('aria-hidden');
+        const displayStyle = window.getComputedStyle(img).display;
+        const zIndex = window.getComputedStyle(img).zIndex;
+        const src = img.getAttribute('src');
+
+        // Check if the image is decorative, hidden, or not visible
+        if (role === "presentation" || ariaHidden === "true" || displayStyle === "none" || zIndex === "-1" || !src) {
+            logResult('inapplicable', 'Image is decorative or hidden', img);
+        } else if (altText !== null && altText.trim() !== '') {
+            logResult('passed', 'Image has alt text: "' + altText + '"', img);
+        } else {
+            logResult('failed', 'Image missing alt text', img);
+        }
+    });
+}
 
     // Run checks
 
