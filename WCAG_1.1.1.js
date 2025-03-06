@@ -262,12 +262,15 @@ function updateResults() {
         const displayStyle = window.getComputedStyle(img).display;
         const zIndex = window.getComputedStyle(img).zIndex;
         const src = img.getAttribute('src');
+        const parentAriaLabel = img.closest('a')?.getAttribute('aria-label');
 
         // Check if the image is decorative, hidden, or not visible
-        if (role === "presentation" || ariaHidden === "true" || displayStyle === "none" || zIndex === "-1" || !src) {
+        if (altText === "" || role === "presentation" || ariaHidden === "true" || displayStyle === "none" || zIndex === "-1" || !src) {
             logResult('inapplicable', 'Image is decorative or hidden', img);
         } else if (altText !== null && altText.trim() !== '') {
             logResult('passed', 'Image has alt text: "' + altText + '"', img);
+        } else if (parentAriaLabel !== null && parentAriaLabel.trim() !== '') {
+            logResult('passed', 'Image is within a link that has aria-label: "' + parentAriaLabel + '"', img);
         } else {
             logResult('failed', 'Image missing alt text', img);
         }
