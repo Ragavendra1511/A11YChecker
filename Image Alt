@@ -218,11 +218,11 @@ javascript:(function(){
       const locationDiv = document.createElement('div');
       
       const htmlSnippet = document.createElement('div');
-      htmlSnippet.innerHTML = '<strong>HTML:</strong><br><code style="background: #f5f5f5; padding: 2px 4px; border-radius: 3px; font-size: 12px; display: block; margin: 4px 0; word-wrap: break-word;">' + 
+      htmlSnippet.innerHTML = '<strong>HTML:</strong><br><code style="background: #f5f5f5; padding: 2px 4px; border-radius: 3px; font-size: 12px; display: block; margin: 4px 0; word-wrap: break-word; max-height: 80px; overflow-y: auto; white-space: pre-wrap;">' + 
         getHTMLSnippet(img).replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</code>';
       
       const xpathDiv = document.createElement('div');
-      xpathDiv.innerHTML = '<strong>XPath:</strong><br><code style="background: #f5f5f5; padding: 2px 4px; border-radius: 3px; font-size: 12px; display: block; margin: 4px 0; word-wrap: break-word;">' + 
+      xpathDiv.innerHTML = '<strong>XPath:</strong><br><code style="background: #f5f5f5; padding: 2px 4px; border-radius: 3px; font-size: 12px; display: block; margin: 4px 0; word-wrap: break-word; max-height: 60px; overflow-y: auto; white-space: pre-wrap;">' + 
         getXPath(img) + '</code>';
       
       locationDiv.appendChild(htmlSnippet);
