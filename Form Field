@@ -1,0 +1,335 @@
+javascript:(function(){
+  // Function to get XPath of an element
+  function getXPath(element) {
+    if (element.id !== '') {
+      return '//*[@id="' + element.id + '"]';
+    }
+    if (element === document.body) {
+      return '/html/body';
+    }
+    
+    let ix = 0;
+    const siblings = element.parentNode.childNodes;
+    for (let i = 0; i < siblings.length; i++) {
+      const sibling = siblings[i];
+      if (sibling === element) {
+        return getXPath(element.parentNode) + '/' + element.tagName.toLowerCase() + '[' + (ix + 1) + ']';
+      }
+      if (sibling.nodeType === 1 && sibling.tagName === element.tagName) {
+        ix++;
+      }
+    }
+  }
+
+  // Function to get accessible label
+  function getAccessibleLabel(element) {
+    const labels = [];
+    
+    // aria-label
+    if (element.getAttribute('aria-label')) {
+      labels.push('aria-label: "' + element.getAttribute('aria-label') + '"');
+    }
+    
+    // aria-labelledby
+    if (element.getAttribute('aria-labelledby')) {
+      const labelIds = element.getAttribute('aria-labelledby').split(' ');
+      labelIds.forEach(id => {
+        const labelEl = document.getElementById(id);
+        if (labelEl) {
+          labels.push('aria-labelledby: "' + labelEl.textContent.trim() + '"');
+        }
+      });
+    }
+    
+    // aria-describedby
+    if (element.getAttribute('aria-describedby')) {
+      const descIds = element.getAttribute('aria-describedby').split(' ');
+      descIds.forEach(id => {
+        const descEl = document.getElementById(id);
+        if (descEl) {
+          labels.push('aria-describedby: "' + descEl.textContent.trim() + '"');
+        }
+      });
+    }
+    
+    // Associated label element (works for all form elements including select)
+    if (element.id) {
+      const label = document.querySelector('label[for="' + element.id + '"]');
+      if (label) {
+        labels.push('label: "' + label.textContent.trim() + '"');
+      }
+    }
+    
+    // Parent label (check if element is wrapped in a label)
+    const parentLabel = element.closest('label');
+    if (parentLabel && parentLabel !== element) {
+      // Get label text excluding the form element's text
+      const labelText = Array.from(parentLabel.childNodes)
+        .filter(node => node.nodeType === 3 || (node.nodeType === 1 && !['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(node.tagName)))
+        .map(node => node.textContent || '')
+        .join('')
+        .trim();
+      if (labelText) {
+        labels.push('parent label: "' + labelText + '"');
+      }
+    }
+    
+    // For select elements, also check for nearby labels or legend
+    if (element.tagName.toLowerCase() === 'select') {
+      // Check for fieldset legend
+      const fieldset = element.closest('fieldset');
+      if (fieldset) {
+        const legend = fieldset.querySelector('legend');
+        if (legend) {
+          labels.push('fieldset legend: "' + legend.textContent.trim() + '"');
+        }
+      }
+      
+      // Check for preceding label-like elements
+      let prevSibling = element.previousElementSibling;
+      while (prevSibling && ['LABEL', 'SPAN', 'DIV'].includes(prevSibling.tagName)) {
+        if (prevSibling.textContent.trim() && !prevSibling.querySelector('input, select, textarea')) {
+          labels.push('preceding element: "' + prevSibling.textContent.trim() + '"');
+          break;
+        }
+        prevSibling = prevSibling.previousElementSibling;
+      }
+    }
+    
+    // title attribute
+    if (element.getAttribute('title')) {
+      labels.push('title: "' + element.getAttribute('title') + '"');
+    }
+    
+    return labels.length > 0 ? labels.join('; ') : 'None';
+  }
+
+  // Function to suggest accessibility fixes
+  function suggestFix(element, hasLabel) {
+    const fixes = [];
+    const tagName = element.tagName.toLowerCase();
+    
+    if (!hasLabel || hasLabel === 'None') {
+      fixes.push('Add accessible label (aria-label or associated <label>)');
+    }
+    
+    if (element.getAttribute('required') && !element.getAttribute('aria-required')) {
+      fixes.push('Add aria-required="true"');
+    }
+    
+    if ((tagName === 'input' && ['email', 'tel', 'url'].includes(element.type)) && !element.getAttribute('aria-describedby')) {
+      fixes.push('Consider adding format instructions with aria-describedby');
+    }
+    
+    if (element.getAttribute('pattern') && !element.getAttribute('aria-describedby')) {
+      fixes.push('Add pattern description with aria-describedby');
+    }
+    
+    if (!element.getAttribute('autocomplete') && tagName === 'input' && ['email', 'tel', 'password', 'text'].includes(element.type)) {
+      fixes.push('Consider adding autocomplete attribute');
+    }
+    
+    // Additional checks for ARIA elements
+    if (element.getAttribute('role') === 'button' && !element.getAttribute('tabindex')) {
+      fixes.push('Add tabindex="0" for keyboard accessibility');
+    }
+    
+    if (element.hasAttribute('contenteditable') && !element.getAttribute('role')) {
+      fixes.push('Add appropriate ARIA role (e.g., textbox)');
+    }
+    
+    // Check for custom form controls
+    if (['combobox', 'listbox', 'searchbox'].includes(element.getAttribute('role'))) {
+      if (!element.getAttribute('aria-expanded') && element.getAttribute('role') === 'combobox') {
+        fixes.push('Add aria-expanded attribute for combobox');
+      }
+    }
+    
+    return fixes.length > 0 ? fixes.join('; ') : 'Good accessibility practices detected';
+  }
+
+  // Function to get WCAG criteria
+  function getWCAGCriteria(element, hasLabel) {
+    const criteria = [];
+    
+    if (!hasLabel || hasLabel === 'None') {
+      criteria.push('1.3.1 (Info and Relationships)');
+      criteria.push('3.3.2 (Labels or Instructions)');
+    }
+    
+    if (element.getAttribute('required')) {
+      criteria.push('3.3.2 (Labels or Instructions)');
+    }
+    
+    criteria.push('4.1.2 (Name, Role, Value)');
+    
+    return criteria.join(', ');
+  }
+
+  // Get all form fields (including those outside of form tags)
+  const formFields = document.querySelectorAll('input, select, textarea, button[type="submit"], button[type="button"], button[type="reset"], button:not([type]), [role="button"], [role="textbox"], [role="combobox"], [role="listbox"], [role="searchbox"], [contenteditable="true"]');
+  
+  if (formFields.length === 0) {
+    alert('No interactive form elements found on this page. This includes inputs, selects, textareas, buttons, and ARIA form controls.');
+    return;
+  }
+
+  // Create modal overlay
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.8);
+    z-index: 999999;
+    overflow: auto;
+    padding: 20px;
+    box-sizing: border-box;
+  `;
+
+  // Create table container
+  const container = document.createElement('div');
+  container.style.cssText = `
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    max-width: 100%;
+    margin: 0 auto;
+    position: relative;
+  `;
+
+  // Create close button
+  const closeBtn = document.createElement('button');
+  closeBtn.innerHTML = '✕';
+  closeBtn.style.cssText = `
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    background: #ff4757;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+  `;
+  closeBtn.onclick = () => document.body.removeChild(overlay);
+
+  // Create title
+  const title = document.createElement('h2');
+  title.textContent = 'Form Field Analysis Report';
+  title.style.cssText = 'margin-top: 0; color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px;';
+
+  // Create table
+  const table = document.createElement('table');
+  table.style.cssText = `
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+    font-size: 12px;
+  `;
+
+  // Create table header
+  const thead = document.createElement('thead');
+  thead.innerHTML = `
+    <tr style="background: #3498db; color: white;">
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">Field Type/Tag</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">Element ID</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">Name Attribute</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">Current Value</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">Placeholder</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">ARIA Role</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">XPath</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">HTML Snippet</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">Accessible Label</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">Suggested Fix</th>
+      <th style="padding: 12px 8px; border: 1px solid #ddd; text-align: left;">WCAG Criteria</th>
+    </tr>
+  `;
+  table.appendChild(thead);
+
+  // Create table body
+  const tbody = document.createElement('tbody');
+
+  formFields.forEach((field, index) => {
+    const accessibleLabel = getAccessibleLabel(field);
+    const row = document.createElement('tr');
+    row.style.cssText = index % 2 === 0 ? 'background: #f8f9fa;' : 'background: white;';
+    
+    // Determine field type more comprehensively
+    let fieldType = field.tagName.toLowerCase();
+    if (field.type) {
+      fieldType += ` (${field.type})`;
+    } else if (field.getAttribute('role')) {
+      fieldType += ` [role="${field.getAttribute('role')}"]`;
+    } else if (field.hasAttribute('contenteditable')) {
+      fieldType += ' (contenteditable)';
+    }
+    
+    const elementId = field.id || 'None';
+    const nameAttr = field.name || 'None';
+    
+    // Get current value based on element type
+    let currentValue = '';
+    if (field.tagName.toLowerCase() === 'select') {
+      const selectedOption = field.options[field.selectedIndex];
+      currentValue = selectedOption ? selectedOption.text || selectedOption.value : 'No selection';
+    } else if (field.hasAttribute('contenteditable')) {
+      currentValue = field.textContent || field.innerHTML || 'Empty';
+    } else {
+      currentValue = field.value || field.textContent || 'Empty';
+    }
+    
+    const placeholder = field.placeholder || field.getAttribute('aria-placeholder') || 'None';
+    const ariaRole = field.getAttribute('role') || 'None';
+    const xpath = getXPath(field);
+    const htmlSnippet = field.outerHTML; // Show full HTML code
+    const suggestedFix = suggestFix(field, accessibleLabel);
+    const wcagCriteria = getWCAGCriteria(field, accessibleLabel);
+
+    row.innerHTML = `
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top; font-weight: bold;">${fieldType}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top; word-break: break-all;">${elementId}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top; word-break: break-all;">${nameAttr}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top; max-width: 200px; max-height: 100px; overflow-y: auto; word-break: break-word; white-space: pre-wrap;">${currentValue}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top;">${placeholder}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top;">${ariaRole}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top; font-family: monospace; font-size: 11px; word-break: break-all; max-width: 150px; max-height: 100px; overflow-y: auto;">${xpath}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top; font-family: monospace; font-size: 10px; max-width: 250px; max-height: 120px; overflow-y: auto; word-break: break-word; white-space: pre-wrap; background: #f8f9fa;">${htmlSnippet}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top; max-width: 200px; max-height: 100px; overflow-y: auto; word-break: break-word; white-space: pre-wrap; ${accessibleLabel === 'None' ? 'background: #ffebee; color: #c62828;' : 'background: #e8f5e8; color: #2e7d32;'}">${accessibleLabel}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top; color: #d84315; max-width: 200px; max-height: 100px; overflow-y: auto; word-break: break-word; white-space: pre-wrap;">${suggestedFix}</td>
+      <td style="padding: 8px; border: 1px solid #ddd; vertical-align: top; font-size: 11px; max-height: 100px; overflow-y: auto;">${wcagCriteria}</td>
+    `;
+    
+    tbody.appendChild(row);
+  });
+
+  table.appendChild(tbody);
+
+  // Add summary
+  const summary = document.createElement('div');
+  summary.style.cssText = 'margin-top: 20px; padding: 15px; background: #e3f2fd; border-radius: 4px; border-left: 4px solid #2196f3;';
+  summary.innerHTML = `
+    <strong>Summary:</strong> Found ${formFields.length} form fields. 
+    Fields without accessible labels: ${Array.from(formFields).filter(f => getAccessibleLabel(f) === 'None').length}
+  `;
+
+  // Assemble modal
+  container.appendChild(closeBtn);
+  container.appendChild(title);
+  container.appendChild(summary);
+  container.appendChild(table);
+  overlay.appendChild(container);
+  document.body.appendChild(overlay);
+
+  // Add click outside to close
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      document.body.removeChild(overlay);
+    }
+  });
+})();
