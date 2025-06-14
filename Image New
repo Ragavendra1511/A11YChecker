@@ -1,0 +1,430 @@
+javascript:(function(){
+  // Check if already running
+  if (window.imageAccessibilityTester) {
+    window.imageAccessibilityTester.cleanup();
+    return;
+  }
+
+  const tester = {
+    images: [],
+    overlays: [],
+    panel: null,
+    currentFocusedImage: null,
+    
+    init() {
+      this.findImages();
+      this.createOverlays();
+      this.createNavigationPanel();
+      this.setupEventListeners();
+      window.imageAccessibilityTester = this;
+    },
+    
+    findImages() {
+      const allImages = document.querySelectorAll('img, svg, canvas, [role="img"]');
+      this.images = Array.from(allImages).map((img, index) => {
+        const data = {
+          element: img,
+          index: index + 1,
+          xpath: this.getXPath(img),
+          label: this.getAccessibleLabel(img),
+          hasAlt: img.hasAttribute('alt'),
+          altText: img.getAttribute('alt') || '',
+          ariaLabel: img.getAttribute('aria-label') || '',
+          ariaLabelledBy: img.getAttribute('aria-labelledby') || '',
+          role: img.getAttribute('role') || '',
+          ariaHidden: img.getAttribute('aria-hidden') || '',
+          displayStyle: getComputedStyle(img).display,
+          figcaption: this.getFigcaption(img)
+        };
+        
+        // Add temporary attribute for identification
+        img.setAttribute('data-img-tester-id', index + 1);
+        
+        return data;
+      });
+    },
+    
+    getAccessibleLabel(img) {
+      // Priority order for accessible labels
+      const ariaLabel = img.getAttribute('aria-label');
+      if (ariaLabel) return ariaLabel;
+      
+      const ariaLabelledBy = img.getAttribute('aria-labelledby');
+      if (ariaLabelledBy) {
+        const labelElement = document.getElementById(ariaLabelledBy);
+        if (labelElement) return labelElement.textContent.trim();
+      }
+      
+      const alt = img.getAttribute('alt');
+      if (alt !== null) return alt;
+      
+      const figcaption = this.getFigcaption(img);
+      if (figcaption) return figcaption;
+      
+      const title = img.getAttribute('title');
+      if (title) return title;
+      
+      return '';
+    },
+    
+    getFigcaption(img) {
+      const figure = img.closest('figure');
+      if (figure) {
+        const figcaption = figure.querySelector('figcaption');
+        if (figcaption) return figcaption.textContent.trim();
+      }
+      return '';
+    },
+    
+    getXPath(element) {
+      if (element.id) return `//*[@id="${element.id}"]`;
+      
+      // Try to find a simple, unique selector
+      const tagName = element.tagName.toLowerCase();
+      
+      // Check for unique attributes that could make a short path
+      if (element.src) {
+        const filename = element.src.split('/').pop().split('?')[0];
+        if (filename) return `//${tagName}[contains(@src, "${filename}")]`;
+      }
+      
+      if (element.className) {
+        let classString = '';
+        if (typeof element.className === 'string') {
+          classString = element.className;
+        } else if (element.className.baseVal !== undefined) {
+          classString = element.className.baseVal;
+        } else if (element.className.toString) {
+          classString = element.className.toString();
+        }
+        
+        if (classString && classString.trim()) {
+          const firstClass = classString.trim().split(/\s+/)[0];
+          return `//${tagName}[@class="${firstClass}"]`;
+        }
+      }
+      
+      // Check for alt attribute
+      if (element.alt) {
+        return `//${tagName}[@alt="${element.alt}"]`;
+      }
+      
+      // Check for title attribute
+      if (element.title) {
+        return `//${tagName}[@title="${element.title}"]`;
+      }
+      
+      // Find position among siblings of same type
+      const parent = element.parentNode;
+      if (parent) {
+        const siblings = Array.from(parent.children).filter(child => 
+          child.tagName.toLowerCase() === tagName
+        );
+        
+        if (siblings.length > 1) {
+          const index = siblings.indexOf(element) + 1;
+          const parentSelector = this.getSimpleParentSelector(parent);
+          return `${parentSelector}/${tagName}[${index}]`;
+        } else {
+          const parentSelector = this.getSimpleParentSelector(parent);
+          return `${parentSelector}/${tagName}`;
+        }
+      }
+      
+      return `//${tagName}`;
+    },
+    
+    getSimpleParentSelector(element) {
+      if (!element || element === document.body) return '';
+      
+      if (element.id) return `//*[@id="${element.id}"]`;
+      
+      const tagName = element.tagName.toLowerCase();
+      
+      // Check for class
+      if (element.className) {
+        let classString = '';
+        if (typeof element.className === 'string') {
+          classString = element.className;
+        } else if (element.className.baseVal !== undefined) {
+          classString = element.className.baseVal;
+        }
+        
+        if (classString && classString.trim()) {
+          const firstClass = classString.trim().split(/\s+/)[0];
+          return `//${tagName}[@class="${firstClass}"]`;
+        }
+      }
+      
+      return `//${tagName}`;
+    },
+    
+    createOverlays() {
+      this.images.forEach(imgData => {
+        const img = imgData.element;
+        const rect = img.getBoundingClientRect();
+        
+        // Style the image
+        img.style.border = '3px solid red';
+        img.style.backgroundColor = 'rgba(255, 0, 0, 0.1)';
+        img.style.outline = '2px dashed red';
+        img.style.outlineOffset = '2px';
+        
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+          position: absolute;
+          top: ${rect.top + window.scrollY}px;
+          left: ${rect.left + window.scrollX}px;
+          width: ${rect.width}px;
+          height: ${rect.height}px;
+          background: transparent;
+          cursor: pointer;
+          z-index: 9998;
+          pointer-events: auto;
+        `;
+        
+        overlay.setAttribute('data-img-index', imgData.index);
+        overlay.addEventListener('click', () => this.focusImage(imgData));
+        
+        document.body.appendChild(overlay);
+        this.overlays.push(overlay);
+      });
+    },
+    
+    createNavigationPanel() {
+      const panel = document.createElement('div');
+      panel.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 300px;
+        background: white;
+        border: 2px solid #333;
+        border-radius: 8px;
+        padding: 15px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        z-index: 9999;
+        font-family: Arial, sans-serif;
+        font-size: 12px;
+        cursor: move;
+      `;
+      
+      panel.innerHTML = `
+        <div style="margin-bottom: 10px; font-weight: bold; cursor: move;" id="panelHeader">
+          📸 Image Accessibility Tester (${this.images.length} images)
+        </div>
+        <select id="imageSelect" style="width: 100%; margin-bottom: 10px; padding: 5px;">
+          <option value="">Select an image...</option>
+          ${this.images.map(img => 
+            `<option value="${img.index}">#${img.index}: ${img.label || 'No accessible label'}</option>`
+          ).join('')}
+        </select>
+        <button id="goToImage" style="width: 48%; margin-right: 4%; padding: 5px;">Go to Image</button>
+        <button id="closePanel" style="width: 48%; padding: 5px;">Close</button>
+        <div id="imageInfo" style="margin-top: 10px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 10px; max-height: 150px; overflow-y: auto;"></div>
+      `;
+      
+      document.body.appendChild(panel);
+      this.panel = panel;
+      
+      // Make panel draggable
+      this.makeDraggable(panel);
+      
+      // Setup panel event listeners
+      document.getElementById('goToImage').addEventListener('click', () => {
+        const select = document.getElementById('imageSelect');
+        const index = parseInt(select.value);
+        if (index) {
+          const imgData = this.images.find(img => img.index === index);
+          if (imgData) this.focusImage(imgData);
+        }
+      });
+      
+      document.getElementById('closePanel').addEventListener('click', () => {
+        this.cleanup();
+      });
+      
+      document.getElementById('imageSelect').addEventListener('change', (e) => {
+        const index = parseInt(e.target.value);
+        if (index) {
+          const imgData = this.images.find(img => img.index === index);
+          if (imgData) this.showImageInfo(imgData);
+        }
+      });
+    },
+    
+    makeDraggable(element) {
+      let isDragging = false;
+      let currentX;
+      let currentY;
+      let initialX;
+      let initialY;
+      let xOffset = 0;
+      let yOffset = 0;
+      
+      const header = element.querySelector('#panelHeader');
+      
+      header.addEventListener('mousedown', (e) => {
+        initialX = e.clientX - xOffset;
+        initialY = e.clientY - yOffset;
+        isDragging = true;
+      });
+      
+      document.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+          e.preventDefault();
+          currentX = e.clientX - initialX;
+          currentY = e.clientY - initialY;
+          xOffset = currentX;
+          yOffset = currentY;
+          element.style.transform = `translate(${currentX}px, ${currentY}px)`;
+        }
+      });
+      
+      document.addEventListener('mouseup', () => {
+        isDragging = false;
+      });
+    },
+    
+    focusImage(imgData) {
+      // Remove previous focus styling
+      if (this.currentFocusedImage) {
+        this.currentFocusedImage.style.boxShadow = '';
+        this.currentFocusedImage.style.border = '3px solid red';
+      }
+      
+      // Scroll to image
+      imgData.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      
+      // Add highly visible focus styling with multiple colors for contrast
+      imgData.element.style.boxShadow = '0 0 0 4px #ffff00, 0 0 0 8px #ff0000, 0 0 20px 12px rgba(255, 255, 0, 0.8)';
+      imgData.element.style.border = '6px solid #00ff00';
+      
+      // Try to focus the element
+      imgData.element.focus();
+      
+      this.currentFocusedImage = imgData.element;
+      
+      // Show image info
+      this.showImageInfo(imgData);
+      
+      // Update dropdown
+      document.getElementById('imageSelect').value = imgData.index;
+    },
+    
+    showImageInfo(imgData) {
+      const infoDiv = document.getElementById('imageInfo');
+      let info = `<strong>Image #${imgData.index}</strong><br>`;
+      
+      // Accessible label status
+      if (imgData.label) {
+        info += `✅ <strong>Accessible Label:</strong> "${imgData.label}"<br>`;
+      } else {
+        info += `❌ <strong>No accessible label found</strong><br>`;
+      }
+      
+      // Alt attribute analysis
+      if (imgData.hasAlt) {
+        if (imgData.altText === '') {
+          info += `⚠️ <strong>Alt:</strong> Empty alt="" (decorative image)<br>`;
+        } else {
+          info += `✅ <strong>Alt:</strong> "${imgData.altText}"<br>`;
+        }
+      } else {
+        info += `❌ <strong>Alt:</strong> Missing alt attribute<br>`;
+      }
+      
+      // Other attributes
+      if (imgData.ariaLabel) {
+        info += `✅ <strong>Aria-label:</strong> "${imgData.ariaLabel}"<br>`;
+      }
+      
+      if (imgData.ariaLabelledBy) {
+        info += `✅ <strong>Aria-labelledby:</strong> "${imgData.ariaLabelledBy}"<br>`;
+      }
+      
+      if (imgData.role) {
+        info += `📋 <strong>Role:</strong> "${imgData.role}"<br>`;
+        if (imgData.role === 'presentation' || imgData.role === 'none') {
+          info += `ℹ️ Image is marked as decorative (role="${imgData.role}")<br>`;
+        }
+      }
+      
+      if (imgData.ariaHidden === 'true') {
+        info += `🙈 <strong>Aria-hidden:</strong> true (hidden from screen readers)<br>`;
+      }
+      
+      if (imgData.displayStyle === 'none') {
+        info += `👻 <strong>Display:</strong> none (visually hidden)<br>`;
+      }
+      
+      if (imgData.figcaption) {
+        info += `📝 <strong>Figcaption:</strong> "${imgData.figcaption}"<br>`;
+      }
+      
+      info += `📍 <strong>XPath:</strong> ${imgData.xpath}`;
+      
+      infoDiv.innerHTML = info;
+    },
+    
+    setupEventListeners() {
+      // Handle window resize to update overlay positions
+      window.addEventListener('resize', () => {
+        this.updateOverlayPositions();
+      });
+      
+      // Handle scroll to update overlay positions
+      window.addEventListener('scroll', () => {
+        this.updateOverlayPositions();
+      });
+    },
+    
+    updateOverlayPositions() {
+      this.overlays.forEach((overlay, index) => {
+        const img = this.images[index].element;
+        const rect = img.getBoundingClientRect();
+        overlay.style.top = `${rect.top + window.scrollY}px`;
+        overlay.style.left = `${rect.left + window.scrollX}px`;
+        overlay.style.width = `${rect.width}px`;
+        overlay.style.height = `${rect.height}px`;
+      });
+    },
+    
+    cleanup() {
+      // Remove image styling
+      this.images.forEach(imgData => {
+        const img = imgData.element;
+        img.style.border = '';
+        img.style.backgroundColor = '';
+        img.style.outline = '';
+        img.style.outlineOffset = '';
+        img.style.boxShadow = '';
+        img.removeAttribute('data-img-tester-id');
+      });
+      
+      // Remove overlays
+      this.overlays.forEach(overlay => {
+        if (overlay.parentNode) {
+          overlay.parentNode.removeChild(overlay);
+        }
+      });
+      
+      // Remove panel
+      if (this.panel && this.panel.parentNode) {
+        this.panel.parentNode.removeChild(this.panel);
+      }
+      
+      // Clear references
+      this.images = [];
+      this.overlays = [];
+      this.panel = null;
+      this.currentFocusedImage = null;
+      
+      // Remove global reference
+      delete window.imageAccessibilityTester;
+    }
+  };
+  
+  tester.init();
+})();
