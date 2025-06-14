@@ -1,0 +1,651 @@
+javascript:(function() {
+    // Prevent multiple instances
+    if (window.interactiveDetectorActive) {
+        alert('Interactive Elements Detector is already active! Click "Clear All" to reset.');
+        return;
+    }
+    
+    window.interactiveDetectorActive = true;
+    
+    // Configuration
+    const config = {
+        highlightColor: '#e6f3ff',
+        borderColor: '#0066cc',
+        overlayZIndex: 9998,
+        panelZIndex: 9999,
+        // Interactive element selectors
+        interactiveSelectors: [
+            'button',
+            'input',
+            'select',
+            'textarea',
+            'a[href]',
+            '[tabindex]:not([tabindex="-1"])',
+            '[role="button"]',
+            '[role="link"]',
+            '[role="checkbox"]',
+            '[role="radio"]',
+            '[role="tab"]',
+            '[role="menuitem"]',
+            '[role="option"]',
+            '[role="slider"]',
+            '[role="spinbutton"]',
+            '[role="switch"]',
+            '[role="textbox"]',
+            '[role="combobox"]',
+            '[role="listbox"]',
+            '[role="tree"]',
+            '[role="grid"]',
+            '[role="treegrid"]',
+            '[onclick]',
+            '[onkeydown]',
+            '[onkeyup]',
+            'summary',
+            'label[for]',
+            'area[href]'
+        ]
+    };
+    
+    // Find all interactive elements
+    function findInteractiveElements() {
+        const elements = new Set();
+        
+        config.interactiveSelectors.forEach(selector => {
+            try {
+                const found = document.querySelectorAll(selector);
+                found.forEach(el => {
+                    // Skip hidden elements
+                    if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+                    if (getComputedStyle(el).display === 'none') return;
+                    if (getComputedStyle(el).visibility === 'hidden') return;
+                    
+                    elements.add(el);
+                });
+            } catch (e) {
+                console.warn('Invalid selector:', selector, e);
+            }
+        });
+        
+        return Array.from(elements);
+    }
+    
+    // Generate XPath for an element
+    function getXPath(element) {
+        if (element.id) {
+            return `//*[@id="${element.id}"]`;
+        }
+        
+        const parts = [];
+        while (element && element.nodeType === Node.ELEMENT_NODE) {
+            let tagName = element.tagName.toLowerCase();
+            let index = 1;
+            let sibling = element.previousElementSibling;
+            
+            while (sibling) {
+                if (sibling.tagName.toLowerCase() === tagName) {
+                    index++;
+                }
+                sibling = sibling.previousElementSibling;
+            }
+            
+            parts.unshift(`${tagName}[${index}]`);
+            element = element.parentElement;
+        }
+        
+        return '/' + parts.join('/');
+    }
+    
+    // Get accessible name/label for an element
+    function getAccessibleLabel(element) {
+        const labels = [];
+        
+        // aria-label
+        if (element.getAttribute('aria-label')) {
+            labels.push(`aria-label: "${element.getAttribute('aria-label')}"`);
+        }
+        
+        // aria-labelledby
+        if (element.getAttribute('aria-labelledby')) {
+            const ids = element.getAttribute('aria-labelledby').split(' ');
+            const labelTexts = ids.map(id => {
+                const labelEl = document.getElementById(id);
+                return labelEl ? labelEl.textContent.trim() : `[#${id}]`;
+            }).filter(text => text);
+            if (labelTexts.length > 0) {
+                labels.push(`aria-labelledby: "${labelTexts.join(' ')}"`);
+            }
+        }
+        
+        // title attribute
+        if (element.title) {
+            labels.push(`title: "${element.title}"`);
+        }
+        
+        // For form elements, check associated labels
+        if (['input', 'select', 'textarea'].includes(element.tagName.toLowerCase())) {
+            if (element.id) {
+                const labelEl = document.querySelector(`label[for="${element.id}"]`);
+                if (labelEl) {
+                    labels.push(`label: "${labelEl.textContent.trim()}"`);
+                }
+            }
+            
+            // Check if wrapped in label
+            const parentLabel = element.closest('label');
+            if (parentLabel) {
+                const labelText = parentLabel.textContent.replace(element.value || '', '').trim();
+                if (labelText) {
+                    labels.push(`wrapping label: "${labelText}"`);
+                }
+            }
+        }
+        
+        return labels.length > 0 ? labels.join(' | ') : 'No accessible label';
+    }
+    
+    // Get visible text/label for an element
+    function getVisibleLabel(element) {
+        const tagName = element.tagName.toLowerCase();
+        
+        // Button elements
+        if (tagName === 'button') {
+            if (element.type === 'submit' && element.value) {
+                return `"${element.value}" (submit button)`;
+            }
+            return element.textContent.trim() || '[No visible text]';
+        }
+        
+        // Input elements
+        if (tagName === 'input') {
+            const type = element.type.toLowerCase();
+            if (type === 'submit' && element.value) {
+                return `"${element.value}" (submit input)`;
+            }
+            if (type === 'button' && element.value) {
+                return `"${element.value}" (button input)`;
+            }
+            if (element.placeholder) {
+                return `placeholder: "${element.placeholder}"`;
+            }
+            if (element.value) {
+                return `value: "${element.value}"`;
+            }
+            return `[${type} input]`;
+        }
+        
+        // Links
+        if (tagName === 'a') {
+            const text = element.textContent.trim();
+            const href = element.href;
+            if (text) {
+                return `"${text}" → ${href}`;
+            }
+            return `[Link] → ${href}`;
+        }
+        
+        // Select elements
+        if (tagName === 'select') {
+            const selectedOption = element.options[element.selectedIndex];
+            const selectedText = selectedOption ? selectedOption.textContent : '[No selection]';
+            return `Select: "${selectedText}"`;
+        }
+        
+        // Textarea
+        if (tagName === 'textarea') {
+            const placeholder = element.placeholder ? ` (placeholder: "${element.placeholder}")` : '';
+            return `Textarea${placeholder}`;
+        }
+        
+        // Other elements with text content
+        const text = element.textContent.trim();
+        if (text) {
+            return `"${text}"`;
+        }
+        
+        // Fallback to element type
+        const role = element.getAttribute('role');
+        if (role) {
+            return `[${role}]`;
+        }
+        
+        return `[${tagName}]`;
+    }
+    
+    // Get element type and attributes
+    function getElementInfo(element) {
+        const tagName = element.tagName.toLowerCase();
+        const type = element.type;
+        const role = element.getAttribute('role');
+        const disabled = element.disabled;
+        const tabindex = element.getAttribute('tabindex');
+        
+        let info = tagName;
+        if (type) info += `[type="${type}"]`;
+        if (role) info += `[role="${role}"]`;
+        if (disabled) info += '[disabled]';
+        if (tabindex) info += `[tabindex="${tabindex}"]`;
+        
+        return info;
+    }
+    
+    // Create visual highlight for an element
+    function highlightElement(element, index) {
+        // Add temporary attribute
+        element.setAttribute('data-interactive-detector-id', index);
+        
+        // Style the element
+        const originalStyle = {
+            border: element.style.border,
+            backgroundColor: element.style.backgroundColor,
+            outline: element.style.outline,
+            position: element.style.position,
+            boxShadow: element.style.boxShadow
+        };
+        
+        element.style.border = `2px solid ${config.borderColor}`;
+        element.style.backgroundColor = config.highlightColor;
+        element.style.outline = `1px dashed ${config.borderColor}`;
+        element.style.outlineOffset = '1px';
+        element.style.boxShadow = `0 0 0 3px ${config.borderColor}33`;
+        
+        // Store original styles for cleanup
+        element.setAttribute('data-original-styles', JSON.stringify(originalStyle));
+        
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'interactive-detector-overlay';
+        overlay.setAttribute('data-element-index', index);
+        
+        const rect = element.getBoundingClientRect();
+        overlay.style.cssText = `
+            position: fixed;
+            top: ${rect.top + window.scrollY}px;
+            left: ${rect.left + window.scrollX}px;
+            width: ${rect.width}px;
+            height: ${rect.height}px;
+            background: rgba(0, 102, 204, 0.1);
+            cursor: pointer;
+            z-index: ${config.overlayZIndex};
+            pointer-events: auto;
+            border: 1px solid ${config.borderColor};
+            border-radius: 2px;
+        `;
+        
+        // Add click handler
+        overlay.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Scroll to element
+            element.scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'center' 
+            });
+            
+            // Try to focus the element
+            setTimeout(() => {
+                if (element.tabIndex < 0 && element.tagName !== 'A') {
+                    element.tabIndex = -1;
+                }
+                element.focus();
+                
+                // Add temporary focus ring
+                const originalOutline = element.style.outline;
+                element.style.outline = '3px solid #ff6600';
+                element.style.outlineOffset = '2px';
+                setTimeout(() => {
+                    element.style.outline = originalOutline;
+                    element.style.outlineOffset = '1px';
+                }, 2000);
+            }, 500);
+        });
+        
+        document.body.appendChild(overlay);
+        
+        // Update overlay position on scroll/resize
+        function updateOverlayPosition() {
+            const newRect = element.getBoundingClientRect();
+            overlay.style.top = `${newRect.top + window.scrollY}px`;
+            overlay.style.left = `${newRect.left + window.scrollX}px`;
+            overlay.style.width = `${newRect.width}px`;
+            overlay.style.height = `${newRect.height}px`;
+        }
+        
+        window.addEventListener('scroll', updateOverlayPosition);
+        window.addEventListener('resize', updateOverlayPosition);
+        
+        return overlay;
+    }
+    
+    // Create navigation panel
+    function createNavigationPanel(elements) {
+        const panel = document.createElement('div');
+        panel.id = 'interactive-detector-panel';
+        panel.className = 'interactive-detector-panel';
+        
+        panel.innerHTML = `
+            <div class="panel-header">
+                <span class="panel-title">🎯 Interactive Elements (${elements.length})</span>
+                <button class="panel-minimize" title="Minimize">−</button>
+            </div>
+            <div class="panel-content">
+                <select class="element-selector" style="width: 100%; margin-bottom: 5px;">
+                    <option value="">Select an element...</option>
+                </select>
+                <div class="element-details" style="display: none;">
+                    <div class="detail-section">
+                        <strong>Element:</strong> <span class="element-type"></span>
+                    </div>
+                    <div class="detail-section">
+                        <strong>Visible Label:</strong> <span class="visible-label"></span>
+                    </div>
+                    <div class="detail-section">
+                        <strong>Accessible Label:</strong> <span class="accessible-label"></span>
+                    </div>
+                    <div class="detail-section">
+                        <strong>XPath:</strong> <span class="xpath"></span>
+                    </div>
+                </div>
+                <div class="panel-buttons">
+                    <button class="go-button">Go to Element</button>
+                    <button class="clear-button">Clear All</button>
+                </div>
+                <div class="panel-info">
+                    <small>Drag panel to move • Click highlighted elements to focus</small>
+                </div>
+            </div>
+        `;
+        
+        // Style the panel
+        panel.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 350px;
+            max-height: 80vh;
+            overflow-y: auto;
+            background: #fff;
+            border: 2px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            z-index: ${config.panelZIndex};
+            user-select: none;
+        `;
+        
+        // Style panel components
+        const style = document.createElement('style');
+        style.textContent = `
+            .panel-header {
+                background: #f0f0f0;
+                padding: 8px 12px;
+                border-bottom: 1px solid #ddd;
+                cursor: move;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-radius: 6px 6px 0 0;
+            }
+            .panel-title {
+                font-weight: bold;
+                font-size: 13px;
+            }
+            .panel-minimize {
+                background: none;
+                border: none;
+                font-size: 16px;
+                cursor: pointer;
+                padding: 0;
+                width: 20px;
+                height: 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .panel-content {
+                padding: 12px;
+            }
+            .element-details {
+                background: #f9f9f9;
+                padding: 8px;
+                border-radius: 4px;
+                margin-bottom: 8px;
+                border: 1px solid #e0e0e0;
+            }
+            .detail-section {
+                margin-bottom: 6px;
+                word-break: break-word;
+            }
+            .detail-section:last-child {
+                margin-bottom: 0;
+            }
+            .detail-section strong {
+                color: #333;
+                font-size: 11px;
+            }
+            .detail-section span {
+                color: #666;
+                font-size: 10px;
+                font-family: monospace;
+            }
+            .panel-buttons {
+                display: flex;
+                gap: 5px;
+                margin-bottom: 5px;
+            }
+            .go-button, .clear-button {
+                flex: 1;
+                padding: 6px 8px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                background: #f9f9f9;
+                cursor: pointer;
+                font-size: 11px;
+            }
+            .go-button:hover, .clear-button:hover {
+                background: #e9e9e9;
+            }
+            .clear-button {
+                background: #ffe6e6;
+                border-color: #ffcccc;
+            }
+            .clear-button:hover {
+                background: #ffdddd;
+            }
+            .panel-info {
+                text-align: center;
+                color: #666;
+                margin-top: 5px;
+            }
+            .element-selector {
+                padding: 4px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                font-size: 11px;
+            }
+        `;
+        document.head.appendChild(style);
+        
+        // Populate dropdown
+        const select = panel.querySelector('.element-selector');
+        const detailsDiv = panel.querySelector('.element-details');
+        
+        elements.forEach((element, index) => {
+            const option = document.createElement('option');
+            option.value = index;
+            
+            const elementInfo = getElementInfo(element);
+            const visibleLabel = getVisibleLabel(element);
+            
+            option.textContent = `${index + 1}. ${elementInfo} - ${visibleLabel}`;
+            select.appendChild(option);
+        });
+        
+        // Handle selection change
+        select.addEventListener('change', () => {
+            const selectedIndex = select.value;
+            if (selectedIndex !== '') {
+                const element = elements[selectedIndex];
+                const elementType = panel.querySelector('.element-type');
+                const visibleLabel = panel.querySelector('.visible-label');
+                const accessibleLabel = panel.querySelector('.accessible-label');
+                const xpath = panel.querySelector('.xpath');
+                
+                elementType.textContent = getElementInfo(element);
+                visibleLabel.textContent = getVisibleLabel(element);
+                accessibleLabel.textContent = getAccessibleLabel(element);
+                xpath.textContent = getXPath(element);
+                
+                detailsDiv.style.display = 'block';
+            } else {
+                detailsDiv.style.display = 'none';
+            }
+        });
+        
+        // Add event listeners
+        const goButton = panel.querySelector('.go-button');
+        const clearButton = panel.querySelector('.clear-button');
+        const minimizeButton = panel.querySelector('.panel-minimize');
+        
+        goButton.addEventListener('click', () => {
+            const selectedIndex = select.value;
+            if (selectedIndex !== '') {
+                const overlay = document.querySelector(`[data-element-index="${selectedIndex}"]`);
+                if (overlay) {
+                    overlay.click();
+                }
+            }
+        });
+        
+        clearButton.addEventListener('click', () => {
+            clearAllHighlights();
+        });
+        
+        let isMinimized = false;
+        minimizeButton.addEventListener('click', () => {
+            const content = panel.querySelector('.panel-content');
+            if (isMinimized) {
+                content.style.display = 'block';
+                minimizeButton.textContent = '−';
+                minimizeButton.title = 'Minimize';
+                panel.style.width = '350px';
+            } else {
+                content.style.display = 'none';
+                minimizeButton.textContent = '+';
+                minimizeButton.title = 'Expand';
+                panel.style.width = '200px';
+            }
+            isMinimized = !isMinimized;
+        });
+        
+        // Make panel draggable
+        let isDragging = false;
+        let dragOffset = { x: 0, y: 0 };
+        
+        const header = panel.querySelector('.panel-header');
+        header.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            const rect = panel.getBoundingClientRect();
+            dragOffset.x = e.clientX - rect.left;
+            dragOffset.y = e.clientY - rect.top;
+            panel.style.opacity = '0.8';
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const x = e.clientX - dragOffset.x;
+                const y = e.clientY - dragOffset.y;
+                
+                // Keep panel within viewport
+                const maxX = window.innerWidth - panel.offsetWidth;
+                const maxY = window.innerHeight - panel.offsetHeight;
+                
+                panel.style.left = Math.max(0, Math.min(maxX, x)) + 'px';
+                panel.style.top = Math.max(0, Math.min(maxY, y)) + 'px';
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+            }
+        });
+        
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                panel.style.opacity = '1';
+            }
+        });
+        
+        document.body.appendChild(panel);
+        return panel;
+    }
+    
+    // Clear all highlights and cleanup
+    function clearAllHighlights() {
+        // Remove overlays
+        document.querySelectorAll('.interactive-detector-overlay').forEach(el => el.remove());
+        
+        // Restore original element styles
+        document.querySelectorAll('[data-interactive-detector-id]').forEach(element => {
+            const originalStyles = element.getAttribute('data-original-styles');
+            if (originalStyles) {
+                const styles = JSON.parse(originalStyles);
+                Object.keys(styles).forEach(prop => {
+                    element.style[prop] = styles[prop] || '';
+                });
+            }
+            element.removeAttribute('data-interactive-detector-id');
+            element.removeAttribute('data-original-styles');
+        });
+        
+        // Remove panel
+        const panel = document.getElementById('interactive-detector-panel');
+        if (panel) panel.remove();
+        
+        // Remove style
+        document.querySelectorAll('style').forEach(style => {
+            if (style.textContent.includes('.panel-header')) {
+                style.remove();
+            }
+        });
+        
+        window.interactiveDetectorActive = false;
+        
+        console.log('Interactive Elements Detector cleared!');
+    }
+    
+    // Main execution
+    try {
+        const elements = findInteractiveElements();
+        
+        if (elements.length === 0) {
+            alert('No interactive elements found on this page!');
+            window.interactiveDetectorActive = false;
+            return;
+        }
+        
+        console.log(`Found ${elements.length} interactive elements:`, elements);
+        
+        // Highlight all elements
+        elements.forEach((element, index) => {
+            highlightElement(element, index);
+        });
+        
+        // Create navigation panel
+        createNavigationPanel(elements);
+        
+        // Add keyboard shortcut (Ctrl+Shift+I) to clear
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.shiftKey && e.key === 'I') {
+                e.preventDefault();
+                clearAllHighlights();
+            }
+        });
+        
+        alert(`Interactive Elements Detector activated! Found ${elements.length} interactive elements.\n\nFeatures:\n• Click highlighted elements to focus\n• Use panel to navigate and view details\n• Drag panel to move\n• Press Ctrl+Shift+I to clear`);
+        
+    } catch (error) {
+        console.error('Interactive Elements Detector Error:', error);
+        alert('Error detecting interactive elements: ' + error.message);
+        window.interactiveDetectorActive = false;
+    }
+})();
