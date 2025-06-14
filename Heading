@@ -1,0 +1,631 @@
+javascript:(function(){
+  // Check if already running
+  if (window.headingAccessibilityTester) {
+    window.headingAccessibilityTester.cleanup();
+    return;
+  }
+
+  const tester = {
+    headings: [],
+    panel: null,
+    structureWindow: null,
+    currentFocusedHeading: null,
+    
+    init() {
+      this.findHeadings();
+      if (this.headings.length === 0) {
+        alert('🚨 No headings found on this page!\n\nThis page has no H1-H6 elements or elements with role="heading".\nConsider adding proper heading structure for accessibility.');
+        return;
+      }
+      this.highlightHeadings();
+      this.createNavigationPanel();
+      this.analyzeStructure();
+      window.headingAccessibilityTester = this;
+    },
+    
+    findHeadings() {
+      // Find standard HTML headings
+      const standardHeadings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+      
+      // Find elements with role="heading"
+      const ariaHeadings = document.querySelectorAll('[role="heading"]');
+      
+      // Combine and process all headings
+      const allHeadings = [...standardHeadings, ...ariaHeadings];
+      
+      this.headings = allHeadings.map((heading, index) => {
+        const data = {
+          element: heading,
+          index: index + 1,
+          tagName: heading.tagName.toLowerCase(),
+          level: this.getHeadingLevel(heading),
+          text: heading.textContent.trim(),
+          truncatedText: this.truncateText(heading.textContent.trim(), 50),
+          xpath: this.getXPath(heading),
+          isVisible: this.isVisible(heading),
+          hasValidLevel: this.hasValidLevel(heading),
+          ariaLevel: heading.getAttribute('aria-level'),
+          id: heading.id || '',
+          className: this.getClassName(heading)
+        };
+        
+        // Add temporary attribute for identification
+        heading.setAttribute('data-heading-tester-id', index + 1);
+        
+        return data;
+      });
+    },
+    
+    getHeadingLevel(heading) {
+      if (heading.tagName.match(/^H[1-6]$/i)) {
+        return parseInt(heading.tagName.charAt(1));
+      }
+      
+      // For role="heading", check aria-level
+      const ariaLevel = heading.getAttribute('aria-level');
+      if (ariaLevel) {
+        const level = parseInt(ariaLevel);
+        return (level >= 1 && level <= 6) ? level : null;
+      }
+      
+      return null; // Invalid level
+    },
+    
+    hasValidLevel(heading) {
+      const level = this.getHeadingLevel(heading);
+      return level !== null && level >= 1 && level <= 6;
+    },
+    
+    truncateText(text, maxLength) {
+      if (text.length <= maxLength) return text;
+      return text.substring(0, maxLength) + '...';
+    },
+    
+    getClassName(element) {
+      if (!element.className) return '';
+      
+      if (typeof element.className === 'string') {
+        return element.className;
+      } else if (element.className.baseVal !== undefined) {
+        return element.className.baseVal;
+      } else if (element.className.toString) {
+        return element.className.toString();
+      }
+      return '';
+    },
+    
+    isVisible(element) {
+      const style = getComputedStyle(element);
+      return style.display !== 'none' && 
+             style.visibility !== 'hidden' && 
+             style.opacity !== '0' &&
+             element.offsetWidth > 0 && 
+             element.offsetHeight > 0;
+    },
+    
+    getXPath(element) {
+      if (element.id) return `//*[@id="${element.id}"]`;
+      
+      const tagName = element.tagName.toLowerCase();
+      
+      // For headings, try to use text content for uniqueness
+      const text = element.textContent.trim();
+      if (text && text.length <= 30) {
+        return `//${tagName}[text()="${text}"]`;
+      }
+      
+      // Check for class
+      const className = this.getClassName(element);
+      if (className && className.trim()) {
+        const firstClass = className.trim().split(/\s+/)[0];
+        return `//${tagName}[@class="${firstClass}"]`;
+      }
+      
+      // Find position among siblings of same tag
+      const parent = element.parentNode;
+      if (parent) {
+        const siblings = Array.from(parent.children).filter(child => 
+          child.tagName.toLowerCase() === tagName
+        );
+        
+        if (siblings.length > 1) {
+          const index = siblings.indexOf(element) + 1;
+          return `//${tagName}[${index}]`;
+        }
+      }
+      
+      return `//${tagName}`;
+    },
+    
+    highlightHeadings() {
+      this.headings.forEach(headingData => {
+        const heading = headingData.element;
+        const level = headingData.level;
+        
+        // Color coding by level
+        const colors = {
+          1: { border: '#e74c3c', bg: 'rgba(231, 76, 60, 0.1)' },    // Red for H1
+          2: { border: '#f39c12', bg: 'rgba(243, 156, 18, 0.1)' },   // Orange for H2
+          3: { border: '#f1c40f', bg: 'rgba(241, 196, 15, 0.1)' },   // Yellow for H3
+          4: { border: '#2ecc71', bg: 'rgba(46, 204, 113, 0.1)' },   // Green for H4
+          5: { border: '#3498db', bg: 'rgba(52, 152, 219, 0.1)' },   // Blue for H5
+          6: { border: '#9b59b6', bg: 'rgba(155, 89, 182, 0.1)' },   // Purple for H6
+          invalid: { border: '#95a5a6', bg: 'rgba(149, 165, 166, 0.1)' } // Gray for invalid
+        };
+        
+        const color = colors[level] || colors.invalid;
+        
+        // Apply styling
+        heading.style.border = `3px solid ${color.border}`;
+        heading.style.backgroundColor = color.bg;
+        heading.style.outline = `2px dashed ${color.border}`;
+        heading.style.outlineOffset = '2px';
+        heading.style.position = 'relative';
+        
+        // Add level badge
+        const badge = document.createElement('span');
+        badge.textContent = level ? `H${level}` : 'H?';
+        badge.style.cssText = `
+          position: absolute;
+          top: -10px;
+          left: -10px;
+          background: ${color.border};
+          color: white;
+          font-family: Arial, sans-serif;
+          font-size: 10px;
+          font-weight: bold;
+          padding: 2px 6px;
+          border-radius: 3px;
+          z-index: 9997;
+          pointer-events: none;
+        `;
+        heading.appendChild(badge);
+        
+        // Mark invisible headings
+        if (!headingData.isVisible) {
+          const invisibleBadge = document.createElement('span');
+          invisibleBadge.textContent = 'HIDDEN';
+          invisibleBadge.style.cssText = `
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background: #e74c3c;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 9px;
+            font-weight: bold;
+            padding: 2px 4px;
+            border-radius: 3px;
+            z-index: 9997;
+            pointer-events: none;
+          `;
+          heading.appendChild(invisibleBadge);
+        }
+      });
+    },
+    
+    createNavigationPanel() {
+      const panel = document.createElement('div');
+      panel.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 350px;
+        background: white;
+        border: 2px solid #333;
+        border-radius: 8px;
+        padding: 15px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        z-index: 9999;
+        font-family: Arial, sans-serif;
+        font-size: 12px;
+        cursor: move;
+        max-height: 80vh;
+        overflow-y: auto;
+      `;
+      
+      const structureIssues = this.getStructureIssues();
+      const issueCount = structureIssues.length;
+      const issueIndicator = issueCount > 0 ? `⚠️ ${issueCount} issues` : '✅ Good structure';
+      
+      panel.innerHTML = `
+        <div style="margin-bottom: 10px; font-weight: bold; cursor: move; display: flex; justify-content: space-between; align-items: center;" id="panelHeader">
+          <span>📋 Heading Tester (${this.headings.length})</span>
+          <span style="font-size: 10px; color: ${issueCount > 0 ? '#e74c3c' : '#27ae60'};">${issueIndicator}</span>
+        </div>
+        
+        <select id="headingSelect" style="width: 100%; margin-bottom: 10px; padding: 5px; font-family: monospace; font-size: 11px;">
+          <option value="">Select a heading...</option>
+          ${this.headings.map(h => {
+            const levelText = h.level ? `H${h.level}` : 'H?';
+            const visibilityFlag = !h.isVisible ? ' [HIDDEN]' : '';
+            return `<option value="${h.index}">${levelText}: ${h.truncatedText}${visibilityFlag}</option>`;
+          }).join('')}
+        </select>
+        
+        <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+          <button id="goToHeading" style="flex: 1; padding: 5px; font-size: 11px;">📍 Go</button>
+          <button id="showStructure" style="flex: 1; padding: 5px; font-size: 11px;">🏗️ Structure</button>
+          <button id="exportHeadings" style="flex: 1; padding: 5px; font-size: 11px;">💾 Export</button>
+        </div>
+        
+        <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+          <button id="checkLevels" style="flex: 1; padding: 5px; font-size: 11px;">🔍 Check</button>
+          <button id="toggleHidden" style="flex: 1; padding: 5px; font-size: 11px;">👁️ Hidden</button>
+          <button id="resetTester" style="flex: 1; padding: 5px; font-size: 11px;">🔄 Reset</button>
+        </div>
+        
+        <div id="headingInfo" style="margin-top: 10px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 10px; max-height: 200px; overflow-y: auto; font-family: monospace;"></div>
+      `;
+      
+      document.body.appendChild(panel);
+      this.panel = panel;
+      
+      // Make panel draggable
+      this.makeDraggable(panel);
+      
+      // Setup event listeners
+      this.setupPanelEvents();
+    },
+    
+    setupPanelEvents() {
+      document.getElementById('goToHeading').addEventListener('click', () => {
+        const select = document.getElementById('headingSelect');
+        const index = parseInt(select.value);
+        if (index) {
+          const headingData = this.headings.find(h => h.index === index);
+          if (headingData) this.focusHeading(headingData);
+        }
+      });
+      
+      document.getElementById('showStructure').addEventListener('click', () => {
+        this.showStructureWindow();
+      });
+      
+      document.getElementById('exportHeadings').addEventListener('click', () => {
+        this.exportHeadings();
+      });
+      
+      document.getElementById('checkLevels').addEventListener('click', () => {
+        this.checkHeadingLevels();
+      });
+      
+      document.getElementById('toggleHidden').addEventListener('click', () => {
+        this.toggleHiddenHeadings();
+      });
+      
+      document.getElementById('resetTester').addEventListener('click', () => {
+        this.cleanup();
+      });
+      
+      document.getElementById('headingSelect').addEventListener('change', (e) => {
+        const index = parseInt(e.target.value);
+        if (index) {
+          const headingData = this.headings.find(h => h.index === index);
+          if (headingData) this.showHeadingInfo(headingData);
+        }
+      });
+    },
+    
+    makeDraggable(element) {
+      let isDragging = false;
+      let currentX, currentY, initialX, initialY;
+      let xOffset = 0, yOffset = 0;
+      
+      const header = element.querySelector('#panelHeader');
+      
+      header.addEventListener('mousedown', (e) => {
+        initialX = e.clientX - xOffset;
+        initialY = e.clientY - yOffset;
+        isDragging = true;
+      });
+      
+      document.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+          e.preventDefault();
+          currentX = e.clientX - initialX;
+          currentY = e.clientY - initialY;
+          xOffset = currentX;
+          yOffset = currentY;
+          element.style.transform = `translate(${currentX}px, ${currentY}px)`;
+        }
+      });
+      
+      document.addEventListener('mouseup', () => {
+        isDragging = false;
+      });
+    },
+    
+    focusHeading(headingData) {
+      // Remove previous focus styling
+      if (this.currentFocusedHeading) {
+        this.removeFocusStyle(this.currentFocusedHeading);
+      }
+      
+      // Scroll to heading
+      headingData.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      
+      // Add focus styling
+      this.addFocusStyle(headingData.element);
+      
+      // Try to focus the element
+      if (headingData.element.tabIndex === -1) {
+        headingData.element.tabIndex = -1;
+      }
+      headingData.element.focus();
+      
+      this.currentFocusedHeading = headingData.element;
+      
+      // Show heading info
+      this.showHeadingInfo(headingData);
+      
+      // Update dropdown
+      document.getElementById('headingSelect').value = headingData.index;
+    },
+    
+    addFocusStyle(element) {
+      element.style.boxShadow = '0 0 0 4px #ffff00, 0 0 0 8px #ff0000, 0 0 20px 12px rgba(255, 255, 0, 0.8)';
+      element.style.transform = 'scale(1.02)';
+      element.style.zIndex = '9998';
+    },
+    
+    removeFocusStyle(element) {
+      element.style.boxShadow = '';
+      element.style.transform = '';
+      element.style.zIndex = '';
+    },
+    
+    showHeadingInfo(headingData) {
+      const infoDiv = document.getElementById('headingInfo');
+      let info = `<strong>Heading #${headingData.index}</strong>\n`;
+      
+      info += `Tag: ${headingData.tagName.toUpperCase()}\n`;
+      info += `Level: ${headingData.level || 'Invalid'}\n`;
+      
+      if (headingData.ariaLevel) {
+        info += `Aria-level: ${headingData.ariaLevel}\n`;
+      }
+      
+      info += `Text: "${headingData.text}"\n`;
+      info += `Visible: ${headingData.isVisible ? 'Yes' : 'No'}\n`;
+      
+      if (headingData.id) {
+        info += `ID: ${headingData.id}\n`;
+      }
+      
+      if (headingData.className) {
+        info += `Class: ${headingData.className}\n`;
+      }
+      
+      info += `XPath: ${headingData.xpath}`;
+      
+      infoDiv.textContent = info;
+    },
+    
+    showStructureWindow() {
+      if (this.structureWindow && !this.structureWindow.closed) {
+        this.structureWindow.focus();
+        return;
+      }
+      
+      const structure = this.generateStructure();
+      const issues = this.getStructureIssues();
+      
+      let content = `
+        <html>
+        <head>
+          <title>Heading Structure Analysis</title>
+          <style>
+            body { font-family: monospace; padding: 20px; background: #f5f5f5; }
+            .structure { background: white; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+            .issues { background: #fff5f5; border-left: 4px solid #e74c3c; padding: 15px; }
+            .good { background: #f0fff4; border-left: 4px solid #27ae60; padding: 15px; }
+            .level-1 { margin-left: 0; color: #e74c3c; font-weight: bold; }
+            .level-2 { margin-left: 20px; color: #f39c12; }
+            .level-3 { margin-left: 40px; color: #f1c40f; }
+            .level-4 { margin-left: 60px; color: #2ecc71; }
+            .level-5 { margin-left: 80px; color: #3498db; }
+            .level-6 { margin-left: 100px; color: #9b59b6; }
+            .invalid { margin-left: 0; color: #95a5a6; text-decoration: line-through; }
+            .hidden { opacity: 0.5; font-style: italic; }
+          </style>
+        </head>
+        <body>
+          <h1>📋 Heading Structure Analysis</h1>
+          
+          <div class="structure">
+            <h2>🏗️ Document Structure</h2>
+            <pre>${structure}</pre>
+          </div>
+          
+          ${issues.length > 0 ? `
+            <div class="issues">
+              <h2>⚠️ Issues Found (${issues.length})</h2>
+              ${issues.map(issue => `<div>• ${issue}</div>`).join('')}
+            </div>
+          ` : `
+            <div class="good">
+              <h2>✅ No structural issues found!</h2>
+              <p>The heading hierarchy follows proper accessibility guidelines.</p>
+            </div>
+          `}
+          
+          <div style="margin-top: 20px; text-align: center;">
+            <button onclick="window.print()" style="padding: 10px 20px; font-size: 14px;">🖨️ Print Report</button>
+            <button onclick="window.close()" style="padding: 10px 20px; font-size: 14px; margin-left: 10px;">❌ Close</button>
+          </div>
+        </body>
+        </html>
+      `;
+      
+      this.structureWindow = window.open('', '_blank', 'width=800,height=600,scrollbars=yes,resizable=yes');
+      this.structureWindow.document.write(content);
+      this.structureWindow.document.close();
+    },
+    
+    generateStructure() {
+      let structure = '';
+      
+      this.headings.forEach(headingData => {
+        const level = headingData.level || 0;
+        const indent = '  '.repeat(level - 1);
+        const levelClass = headingData.hasValidLevel ? `level-${level}` : 'invalid';
+        const hiddenClass = !headingData.isVisible ? ' hidden' : '';
+        const tag = headingData.tagName.toUpperCase();
+        const text = headingData.text || '[Empty heading]';
+        const hiddenFlag = !headingData.isVisible ? ' [HIDDEN]' : '';
+        
+        structure += `${indent}${tag}: ${text}${hiddenFlag}\n`;
+      });
+      
+      return structure || 'No headings found';
+    },
+    
+    getStructureIssues() {
+      const issues = [];
+      let previousLevel = 0;
+      let hasH1 = false;
+      
+      this.headings.forEach((headingData, index) => {
+        const level = headingData.level;
+        
+        if (!level) {
+          issues.push(`Heading #${index + 1}: Invalid or missing heading level`);
+          return;
+        }
+        
+        if (level === 1) hasH1 = true;
+        
+        if (!headingData.text.trim()) {
+          issues.push(`Heading #${index + 1} (H${level}): Empty heading text`);
+        }
+        
+        if (!headingData.isVisible) {
+          issues.push(`Heading #${index + 1} (H${level}): Hidden from users`);
+        }
+        
+        // Check for level skipping
+        if (previousLevel > 0 && level > previousLevel + 1) {
+          issues.push(`Heading #${index + 1} (H${level}): Skipped from H${previousLevel} to H${level}`);
+        }
+        
+        previousLevel = level;
+      });
+      
+      if (this.headings.length > 0 && !hasH1) {
+        issues.push('No H1 heading found - pages should start with H1');
+      }
+      
+      return issues;
+    },
+    
+    checkHeadingLevels() {
+      const issues = this.getStructureIssues();
+      
+      if (issues.length === 0) {
+        alert('✅ Heading structure looks good!\n\nNo accessibility issues detected in the heading hierarchy.');
+      } else {
+        alert(`⚠️ Found ${issues.length} heading issues:\n\n${issues.join('\n')}\n\nClick "Structure" to see detailed analysis.`);
+      }
+    },
+    
+    toggleHiddenHeadings() {
+      const hiddenHeadings = this.headings.filter(h => !h.isVisible);
+      
+      if (hiddenHeadings.length === 0) {
+        alert('ℹ️ No hidden headings found on this page.');
+        return;
+      }
+      
+      const message = `👁️ Found ${hiddenHeadings.length} hidden heading(s):\n\n${
+        hiddenHeadings.map(h => `• H${h.level || '?'}: ${h.text || '[Empty]'}`).join('\n')
+      }\n\nHidden headings may confuse screen reader users.`;
+      
+      alert(message);
+    },
+    
+    exportHeadings() {
+      const structure = this.generateStructure();
+      const issues = this.getStructureIssues();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      
+      const report = `HEADING ACCESSIBILITY REPORT
+Generated: ${new Date().toLocaleString()}
+URL: ${window.location.href}
+Total Headings: ${this.headings.length}
+
+STRUCTURE:
+${structure}
+
+${issues.length > 0 ? `ISSUES (${issues.length}):
+${issues.map(issue => `• ${issue}`).join('\n')}` : 'No issues found!'}
+
+DETAILED DATA:
+${this.headings.map(h => 
+  `H${h.level || '?'} - "${h.text}" (${h.isVisible ? 'Visible' : 'Hidden'})`
+).join('\n')}`;
+      
+      // Create and download file
+      const blob = new Blob([report], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `heading-report-${timestamp}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+    
+    analyzeStructure() {
+      // Store analysis for quick access
+      this.structureAnalysis = {
+        totalHeadings: this.headings.length,
+        levels: [...new Set(this.headings.map(h => h.level).filter(l => l))].sort(),
+        hasH1: this.headings.some(h => h.level === 1),
+        hiddenCount: this.headings.filter(h => !h.isVisible).length,
+        emptyCount: this.headings.filter(h => !h.text.trim()).length,
+        issues: this.getStructureIssues()
+      };
+    },
+    
+    cleanup() {
+      // Remove styling and badges from headings
+      this.headings.forEach(headingData => {
+        const heading = headingData.element;
+        heading.style.border = '';
+        heading.style.backgroundColor = '';
+        heading.style.outline = '';
+        heading.style.outlineOffset = '';
+        heading.style.position = '';
+        this.removeFocusStyle(heading);
+        heading.removeAttribute('data-heading-tester-id');
+        
+        // Remove badges
+        const badges = heading.querySelectorAll('span[style*="position: absolute"]');
+        badges.forEach(badge => badge.remove());
+      });
+      
+      // Remove panel
+      if (this.panel && this.panel.parentNode) {
+        this.panel.parentNode.removeChild(this.panel);
+      }
+      
+      // Close structure window
+      if (this.structureWindow && !this.structureWindow.closed) {
+        this.structureWindow.close();
+      }
+      
+      // Clear references
+      this.headings = [];
+      this.panel = null;
+      this.structureWindow = null;
+      this.currentFocusedHeading = null;
+      
+      // Remove global reference
+      delete window.headingAccessibilityTester;
+    }
+  };
+  
+  tester.init();
+})();
