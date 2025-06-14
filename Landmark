@@ -1,0 +1,740 @@
+javascript:(function(){
+  // Check if already running and cleanup if so
+  if (window.landmarkTester) {
+    window.landmarkTester.cleanup();
+    return;
+  }
+
+  // Create namespace
+  window.landmarkTester = {};
+
+  // Configuration
+  const config = {
+    // Essential landmarks that should be present on most pages
+    essentialLandmarks: {
+      'banner': { required: true, description: 'Header/Banner (site header)' },
+      'contentinfo': { required: true, description: 'Footer/Content Info (site footer)' },
+      'main': { required: true, description: 'Main content area' },
+      'navigation': { required: false, description: 'Navigation menu' }
+    },
+    ariaRoles: ['banner', 'complementary', 'contentinfo', 'form', 'main', 'navigation', 'region', 'search'],
+    htmlLandmarks: ['header', 'article', 'aside', 'main', 'nav', 'form', 'footer', 'section'],
+    styles: {
+      border: '3px solid #ff0000',
+      background: 'rgba(255, 0, 0, 0.1)',
+      outline: '2px dashed #ff6666',
+      outlineOffset: '2px'
+    }
+  };
+
+  let landmarks = [];
+  let overlays = [];
+  let controlPanel = null;
+  let isDragging = false;
+  let dragOffset = { x: 0, y: 0 };
+
+  // Find all landmarks
+  function findLandmarks() {
+    const found = [];
+    
+    // Find ARIA landmark roles
+    config.ariaRoles.forEach(role => {
+      const elements = document.querySelectorAll(`[role="${role}"]`);
+      elements.forEach(el => {
+        found.push({
+          element: el,
+          type: 'aria',
+          role: role,
+          label: getAccessibleName(el) || `${role} landmark`,
+          tagName: el.tagName.toLowerCase()
+        });
+      });
+    });
+
+    // Find HTML5 landmark elements
+    config.htmlLandmarks.forEach(tag => {
+      const elements = document.querySelectorAll(tag);
+      elements.forEach(el => {
+        // Skip if already found as ARIA landmark
+        if (!found.some(item => item.element === el)) {
+          let landmarkRole = getLandmarkRole(tag, el);
+          if (landmarkRole) {
+            found.push({
+              element: el,
+              type: 'html',
+              role: landmarkRole,
+              label: getAccessibleName(el) || `${tag} landmark`,
+              tagName: tag
+            });
+          }
+        }
+      });
+    });
+
+    return found;
+  }
+
+  // Get landmark role for HTML elements
+  function getLandmarkRole(tag, element) {
+    switch (tag) {
+      case 'header':
+        return !isInSectioningContent(element) ? 'banner' : null;
+      case 'footer':
+        return !isInSectioningContent(element) ? 'contentinfo' : null;
+      case 'nav':
+        return 'navigation';
+      case 'main':
+        return 'main';
+      case 'aside':
+        return 'complementary';
+      case 'section':
+        // Only a landmark if it has an accessible name
+        return getAccessibleName(element) ? 'region' : null;
+      case 'form':
+        // Only a landmark if it has an accessible name
+        return getAccessibleName(element) ? 'form' : null;
+      default:
+        return tag;
+    }
+  }
+
+  // Check if element is inside sectioning content
+  function isInSectioningContent(el) {
+    const sectioningElements = ['article', 'aside', 'nav', 'section'];
+    let parent = el.parentElement;
+    while (parent && parent !== document.body) {
+      if (sectioningElements.includes(parent.tagName.toLowerCase())) {
+        return true;
+      }
+      parent = parent.parentElement;
+    }
+    return false;
+  }
+
+  // Get accessible name for element
+  function getAccessibleName(el) {
+    // Check aria-label
+    if (el.getAttribute('aria-label')) {
+      return el.getAttribute('aria-label');
+    }
+    
+    // Check aria-labelledby
+    const labelledBy = el.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const labelEl = document.getElementById(labelledBy);
+      if (labelEl) {
+        return labelEl.textContent.trim();
+      }
+    }
+
+    // For nav elements, check for heading content
+    if (el.tagName.toLowerCase() === 'nav') {
+      const heading = el.querySelector('h1, h2, h3, h4, h5, h6');
+      if (heading) {
+        return heading.textContent.trim();
+      }
+    }
+
+    return null;
+  }
+
+  // Check for missing essential landmarks
+  function checkMissingLandmarks() {
+    const missing = [];
+    const foundRoles = landmarks.map(l => l.role);
+
+    Object.keys(config.essentialLandmarks).forEach(role => {
+      const landmark = config.essentialLandmarks[role];
+      if (landmark.required && !foundRoles.includes(role)) {
+        missing.push({
+          role: role,
+          description: landmark.description
+        });
+      }
+    });
+
+    return missing;
+  }
+
+  // Check for labeling issues
+  function checkLabelingIssues() {
+    const issues = {
+      missingLabels: [],
+      duplicateLabels: [],
+      ambiguousLabels: []
+    };
+
+    // Group landmarks by role
+    const landmarkGroups = {};
+    landmarks.forEach((landmark, index) => {
+      if (!landmarkGroups[landmark.role]) {
+        landmarkGroups[landmark.role] = [];
+      }
+      landmarkGroups[landmark.role].push({ ...landmark, index });
+    });
+
+    // Check each group for labeling issues
+    Object.keys(landmarkGroups).forEach(role => {
+      const group = landmarkGroups[role];
+      
+      if (group.length > 1) {
+        // Multiple landmarks of same type - check for proper labeling
+        const labels = {};
+        const missingLabels = [];
+        
+        group.forEach(landmark => {
+          const accessibleName = getAccessibleName(landmark.element);
+          const effectiveLabel = accessibleName || `${landmark.role} landmark`;
+          
+          if (!accessibleName) {
+            missingLabels.push({
+              role: landmark.role,
+              element: landmark.element,
+              tagName: landmark.tagName,
+              type: landmark.type,
+              index: landmark.index
+            });
+          } else {
+            if (!labels[effectiveLabel]) {
+              labels[effectiveLabel] = [];
+            }
+            labels[effectiveLabel].push(landmark);
+          }
+        });
+
+        // Add missing label issues
+        if (missingLabels.length > 0) {
+          issues.missingLabels.push({
+            role: role,
+            count: group.length,
+            missingCount: missingLabels.length,
+            landmarks: missingLabels
+          });
+        }
+
+        // Check for duplicate labels
+        Object.keys(labels).forEach(label => {
+          if (labels[label].length > 1) {
+            issues.duplicateLabels.push({
+              role: role,
+              label: label,
+              count: labels[label].length,
+              landmarks: labels[label]
+            });
+          }
+        });
+
+        // Check for generic/ambiguous labels
+        group.forEach(landmark => {
+          const accessibleName = getAccessibleName(landmark.element);
+          if (accessibleName) {
+            const genericLabels = ['navigation', 'nav', 'menu', 'main', 'content', 'header', 'footer', 'sidebar'];
+            if (genericLabels.includes(accessibleName.toLowerCase().trim())) {
+              issues.ambiguousLabels.push({
+                role: landmark.role,
+                label: accessibleName,
+                element: landmark.element,
+                tagName: landmark.tagName,
+                index: landmark.index
+              });
+            }
+          }
+        });
+      }
+    });
+
+    return issues;
+  }
+
+  // Apply visual styles to landmark
+  function highlightLandmark(landmark, index) {
+    const el = landmark.element;
+    
+    // Store original styles
+    const originalStyles = {
+      border: el.style.border,
+      background: el.style.background,
+      outline: el.style.outline,
+      outlineOffset: el.style.outlineOffset,
+      position: el.style.position,
+      zIndex: el.style.zIndex
+    };
+
+    // Apply highlight styles
+    Object.assign(el.style, config.styles);
+    
+    // Add temporary attribute for identification
+    el.setAttribute('data-landmark-id', index);
+    
+    // Store original styles for cleanup
+    el._originalLandmarkStyles = originalStyles;
+
+    // Create overlay for easier clicking
+    createOverlay(el, landmark, index);
+  }
+
+  // Create clickable overlay
+  function createOverlay(element, landmark, index) {
+    const rect = element.getBoundingClientRect();
+    const overlay = document.createElement('div');
+    
+    overlay.style.cssText = `
+      position: fixed;
+      top: ${rect.top + window.scrollY}px;
+      left: ${rect.left + window.scrollX}px;
+      width: ${rect.width}px;
+      height: ${rect.height}px;
+      background: transparent;
+      z-index: 9998;
+      cursor: pointer;
+      pointer-events: auto;
+    `;
+
+    // Add tooltip
+    const tooltip = document.createElement('div');
+    tooltip.innerHTML = `
+      <strong>${landmark.role}</strong><br>
+      ${landmark.label}<br>
+      <small>${landmark.type.toUpperCase()}: &lt;${landmark.tagName}&gt;</small>
+    `;
+    tooltip.style.cssText = `
+      position: absolute;
+      top: -50px;
+      left: 0;
+      background: #333;
+      color: white;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      line-height: 1.3;
+      white-space: nowrap;
+      z-index: 9999;
+      opacity: 0;
+      transition: opacity 0.2s;
+      max-width: 250px;
+      white-space: normal;
+    `;
+
+    overlay.appendChild(tooltip);
+
+    // Show tooltip on hover
+    overlay.addEventListener('mouseenter', () => {
+      tooltip.style.opacity = '1';
+    });
+
+    overlay.addEventListener('mouseleave', () => {
+      tooltip.style.opacity = '0';
+    });
+
+    // Click handler
+    overlay.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      scrollToAndFocus(element, landmark);
+    });
+
+    document.body.appendChild(overlay);
+    overlays.push(overlay);
+  }
+
+  // Scroll to and attempt to focus landmark
+  function scrollToAndFocus(element, landmark) {
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    
+    // Try to focus the element
+    if (element.tabIndex === -1 || element.tabIndex >= 0) {
+      element.focus();
+    } else {
+      // Make it focusable temporarily
+      element.tabIndex = -1;
+      element.focus();
+    }
+
+    // Flash the element
+    const originalBackground = element.style.background;
+    element.style.background = 'rgba(255, 255, 0, 0.5)';
+    setTimeout(() => {
+      element.style.background = config.styles.background;
+    }, 500);
+
+    console.log('Focused landmark:', landmark);
+  }
+
+  // Make element draggable
+  function makeDraggable(element) {
+    const header = element.querySelector('.drag-header');
+    if (!header) return;
+
+    header.style.cursor = 'move';
+
+    header.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      const rect = element.getBoundingClientRect();
+      dragOffset.x = e.clientX - rect.left;
+      dragOffset.y = e.clientY - rect.top;
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        element.style.left = (e.clientX - dragOffset.x) + 'px';
+        element.style.top = (e.clientY - dragOffset.y) + 'px';
+        element.style.right = 'auto';
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+  }
+
+  // Create control panel
+  function createControlPanel() {
+    const missing = checkMissingLandmarks();
+    const labelingIssues = checkLabelingIssues();
+    
+    const panel = document.createElement('div');
+    panel.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: white;
+      border: 2px solid #333;
+      border-radius: 8px;
+      z-index: 10000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      min-width: 380px;
+      max-width: 450px;
+      max-height: 80vh;
+      overflow-y: auto;
+    `;
+
+    // Draggable header
+    const header = document.createElement('div');
+    header.className = 'drag-header';
+    header.style.cssText = `
+      background: #f0f0f0;
+      padding: 10px 15px;
+      border-bottom: 1px solid #ddd;
+      border-radius: 6px 6px 0 0;
+      font-weight: bold;
+      color: #333;
+      position: sticky;
+      top: 0;
+      z-index: 10001;
+    `;
+    header.textContent = '🎯 Landmarks Tester (Drag to move)';
+
+    const content = document.createElement('div');
+    content.style.cssText = 'padding: 15px;';
+
+    // Status section
+    const status = document.createElement('div');
+    status.style.cssText = 'margin-bottom: 15px;';
+    
+    const foundInfo = document.createElement('div');
+    foundInfo.innerHTML = `✅ Found <strong>${landmarks.length}</strong> landmarks`;
+    foundInfo.style.cssText = 'margin-bottom: 8px; color: #006600;';
+
+    status.appendChild(foundInfo);
+
+    // Missing landmarks warning
+    if (missing.length > 0) {
+      const missingWarning = document.createElement('div');
+      missingWarning.style.cssText = `
+        background: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 10px;
+        color: #856404;
+      `;
+      
+      const warningTitle = document.createElement('div');
+      warningTitle.innerHTML = '⚠️ <strong>Missing Essential Landmarks:</strong>';
+      warningTitle.style.cssText = 'margin-bottom: 5px;';
+      
+      const missingList = document.createElement('ul');
+      missingList.style.cssText = 'margin: 0; padding-left: 20px; font-size: 12px;';
+      
+      missing.forEach(item => {
+        const li = document.createElement('li');
+        li.textContent = item.description;
+        missingList.appendChild(li);
+      });
+      
+      missingWarning.appendChild(warningTitle);
+      missingWarning.appendChild(missingList);
+      status.appendChild(missingWarning);
+    }
+
+    // Labeling issues warnings
+    const hasLabelingIssues = labelingIssues.missingLabels.length > 0 || 
+                             labelingIssues.duplicateLabels.length > 0 || 
+                             labelingIssues.ambiguousLabels.length > 0;
+
+    if (hasLabelingIssues) {
+      const labelingWarning = document.createElement('div');
+      labelingWarning.style.cssText = `
+        background: #f8d7da;
+        border: 1px solid #f5c6cb;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 10px;
+        color: #721c24;
+        font-size: 12px;
+      `;
+      
+      const warningTitle = document.createElement('div');
+      warningTitle.innerHTML = '🚨 <strong>Landmark Labeling Issues:</strong>';
+      warningTitle.style.cssText = 'margin-bottom: 8px; font-size: 13px;';
+      labelingWarning.appendChild(warningTitle);
+
+      // Missing labels
+      if (labelingIssues.missingLabels.length > 0) {
+        const missingSection = document.createElement('div');
+        missingSection.style.cssText = 'margin-bottom: 8px;';
+        
+        const missingTitle = document.createElement('div');
+        missingTitle.innerHTML = '<strong>📛 Missing Labels (Multiple landmarks need unique labels):</strong>';
+        missingTitle.style.cssText = 'margin-bottom: 4px;';
+        missingSection.appendChild(missingTitle);
+        
+        labelingIssues.missingLabels.forEach(issue => {
+          const issueDiv = document.createElement('div');
+          issueDiv.innerHTML = `• <strong>${issue.role}</strong>: ${issue.missingCount} of ${issue.count} ${issue.role} landmarks missing labels`;
+          issueDiv.style.cssText = 'margin-left: 10px; margin-bottom: 2px;';
+          missingSection.appendChild(issueDiv);
+        });
+        
+        labelingWarning.appendChild(missingSection);
+      }
+
+      // Duplicate labels
+      if (labelingIssues.duplicateLabels.length > 0) {
+        const duplicateSection = document.createElement('div');
+        duplicateSection.style.cssText = 'margin-bottom: 8px;';
+        
+        const duplicateTitle = document.createElement('div');
+        duplicateTitle.innerHTML = '<strong>🔄 Duplicate Labels (Same label used multiple times):</strong>';
+        duplicateTitle.style.cssText = 'margin-bottom: 4px;';
+        duplicateSection.appendChild(duplicateTitle);
+        
+        labelingIssues.duplicateLabels.forEach(issue => {
+          const issueDiv = document.createElement('div');
+          issueDiv.innerHTML = `• <strong>${issue.role}</strong>: "${issue.label}" used ${issue.count} times`;
+          issueDiv.style.cssText = 'margin-left: 10px; margin-bottom: 2px;';
+          duplicateSection.appendChild(issueDiv);
+        });
+        
+        labelingWarning.appendChild(duplicateSection);
+      }
+
+      // Ambiguous labels
+      if (labelingIssues.ambiguousLabels.length > 0) {
+        const ambiguousSection = document.createElement('div');
+        
+        const ambiguousTitle = document.createElement('div');
+        ambiguousTitle.innerHTML = '<strong>❓ Generic Labels (Consider more descriptive labels):</strong>';
+        ambiguousTitle.style.cssText = 'margin-bottom: 4px;';
+        ambiguousSection.appendChild(ambiguousTitle);
+        
+        labelingIssues.ambiguousLabels.forEach(issue => {
+          const issueDiv = document.createElement('div');
+          issueDiv.innerHTML = `• <strong>${issue.role}</strong>: "${issue.label}" (consider being more specific)`;
+          issueDiv.style.cssText = 'margin-left: 10px; margin-bottom: 2px;';
+          ambiguousSection.appendChild(issueDiv);
+        });
+        
+        labelingWarning.appendChild(ambiguousSection);
+      }
+
+      status.appendChild(labelingWarning);
+    }
+
+    // Landmark breakdown
+    const breakdown = document.createElement('div');
+    breakdown.style.cssText = 'margin-bottom: 15px; font-size: 12px;';
+    
+    const landmarkCounts = {};
+    landmarks.forEach(landmark => {
+      landmarkCounts[landmark.role] = (landmarkCounts[landmark.role] || 0) + 1;
+    });
+
+    const breakdownTitle = document.createElement('div');
+    breakdownTitle.innerHTML = '<strong>Landmark Types Found:</strong>';
+    breakdownTitle.style.cssText = 'margin-bottom: 5px;';
+    breakdown.appendChild(breakdownTitle);
+
+    Object.keys(landmarkCounts).forEach(role => {
+      const item = document.createElement('div');
+      const count = landmarkCounts[role];
+      const hasIssues = labelingIssues.missingLabels.some(issue => issue.role === role) ||
+                       labelingIssues.duplicateLabels.some(issue => issue.role === role);
+      const icon = hasIssues ? '⚠️' : '✅';
+      item.innerHTML = `${icon} ${role}: ${count}${count > 1 && hasIssues ? ' (labeling issues)' : ''}`;
+      item.style.cssText = `margin-left: 10px; color: ${hasIssues ? '#856404' : '#666'};`;
+      breakdown.appendChild(item);
+    });
+
+    status.appendChild(breakdown);
+
+    // Navigation section
+    const navSection = document.createElement('div');
+    
+    const select = document.createElement('select');
+    select.style.cssText = 'width: 100%; margin-bottom: 10px; padding: 5px;';
+    
+    // Add default option
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Select a landmark to navigate...';
+    select.appendChild(defaultOption);
+
+    // Add landmark options grouped by type
+    const groupedLandmarks = {};
+    landmarks.forEach((landmark, index) => {
+      if (!groupedLandmarks[landmark.role]) {
+        groupedLandmarks[landmark.role] = [];
+      }
+      groupedLandmarks[landmark.role].push({ landmark, index });
+    });
+
+    Object.keys(groupedLandmarks).sort().forEach(role => {
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = role.toUpperCase();
+      
+      groupedLandmarks[role].forEach(({ landmark, index }) => {
+        const option = document.createElement('option');
+        option.value = index;
+        const accessibleName = getAccessibleName(landmark.element);
+        const displayLabel = accessibleName || '(no label)';
+        const hasIssue = !accessibleName && groupedLandmarks[role].length > 1;
+        option.textContent = `${displayLabel} (${landmark.type}: <${landmark.tagName}>) ${hasIssue ? '⚠️' : ''}`;
+        optgroup.appendChild(option);
+      });
+      
+      select.appendChild(optgroup);
+    });
+
+    const goButton = document.createElement('button');
+    goButton.textContent = '🎯 Go to Landmark';
+    goButton.style.cssText = `
+      width: 100%; 
+      padding: 8px; 
+      background: #007cba; 
+      color: white; 
+      border: none; 
+      border-radius: 4px; 
+      cursor: pointer;
+      margin-bottom: 10px;
+    `;
+
+    goButton.addEventListener('click', () => {
+      const selectedIndex = select.value;
+      if (selectedIndex !== '') {
+        const landmark = landmarks[selectedIndex];
+        scrollToAndFocus(landmark.element, landmark);
+      }
+    });
+
+    const closeButton = document.createElement('button');
+    closeButton.textContent = '✖️ Close Tester';
+    closeButton.style.cssText = `
+      width: 100%; 
+      padding: 8px; 
+      background: #dc3545; 
+      color: white; 
+      border: none; 
+      border-radius: 4px; 
+      cursor: pointer;
+    `;
+
+    closeButton.addEventListener('click', cleanup);
+
+    navSection.appendChild(select);
+    navSection.appendChild(goButton);
+    navSection.appendChild(closeButton);
+
+    content.appendChild(status);
+    content.appendChild(navSection);
+    
+    panel.appendChild(header);
+    panel.appendChild(content);
+
+    document.body.appendChild(panel);
+    
+    // Make panel draggable
+    makeDraggable(panel);
+    
+    return panel;
+  }
+
+  // Cleanup function
+  function cleanup() {
+    // Remove highlights and restore original styles
+    landmarks.forEach(landmark => {
+      const el = landmark.element;
+      if (el._originalLandmarkStyles) {
+        Object.assign(el.style, el._originalLandmarkStyles);
+        delete el._originalLandmarkStyles;
+      }
+      el.removeAttribute('data-landmark-id');
+    });
+
+    // Remove overlays
+    overlays.forEach(overlay => {
+      if (overlay.parentNode) {
+        overlay.parentNode.removeChild(overlay);
+      }
+    });
+
+    // Remove control panel
+    if (controlPanel && controlPanel.parentNode) {
+      controlPanel.parentNode.removeChild(controlPanel);
+    }
+
+    // Clear arrays and namespace
+    landmarks = [];
+    overlays = [];
+    controlPanel = null;
+    delete window.landmarkTester;
+
+    console.log('Landmarks tester cleaned up');
+  }
+
+  // Initialize
+  function init() {
+    landmarks = findLandmarks();
+    
+    if (landmarks.length === 0) {
+      const missing = checkMissingLandmarks();
+      if (missing.length > 0) {
+        alert(`No landmarks found! Missing essential landmarks:\n${missing.map(m => '• ' + m.description).join('\n')}`);
+      } else {
+        alert('No landmarks found on this page!');
+      }
+      return;
+    }
+
+    // Highlight all landmarks
+    landmarks.forEach((landmark, index) => {
+      highlightLandmark(landmark, index);
+    });
+
+    // Create control panel
+    controlPanel = createControlPanel();
+
+    // Store cleanup function in namespace
+    window.landmarkTester.cleanup = cleanup;
+
+    console.log(`Found ${landmarks.length} landmarks:`, landmarks);
+    console.log('Missing essential landmarks:', checkMissingLandmarks());
+    console.log('Labeling issues:', checkLabelingIssues());
+  }
+
+  // Run the tester
+  init();
+})();
