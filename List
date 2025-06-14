@@ -1,0 +1,407 @@
+javascript:(function() {
+    // Prevent multiple instances
+    if (window.listDetectorActive) {
+        alert('List Detector is already active! Click "Clear All" to reset.');
+        return;
+    }
+    
+    window.listDetectorActive = true;
+    
+    // Configuration
+    const config = {
+        highlightColor: '#ffcccc',
+        borderColor: '#ff0000',
+        overlayZIndex: 9998,
+        panelZIndex: 9999,
+        listTypes: ['ul', 'ol', 'dl'] // ul, ol, dl (definition lists)
+    };
+    
+    // Find all lists on the page
+    function findAllLists() {
+        const lists = [];
+        config.listTypes.forEach(type => {
+            const elements = document.querySelectorAll(type);
+            elements.forEach(el => lists.push(el));
+        });
+        return lists;
+    }
+    
+    // Generate XPath for an element
+    function getXPath(element) {
+        if (element.id) {
+            return `//*[@id="${element.id}"]`;
+        }
+        
+        const parts = [];
+        while (element && element.nodeType === Node.ELEMENT_NODE) {
+            let tagName = element.tagName.toLowerCase();
+            let index = 1;
+            let sibling = element.previousElementSibling;
+            
+            while (sibling) {
+                if (sibling.tagName.toLowerCase() === tagName) {
+                    index++;
+                }
+                sibling = sibling.previousElementSibling;
+            }
+            
+            parts.unshift(`${tagName}[${index}]`);
+            element = element.parentElement;
+        }
+        
+        return '/' + parts.join('/');
+    }
+    
+    // Create visual highlight for a list
+    function highlightList(list, index) {
+        // Add temporary attribute
+        list.setAttribute('data-list-detector-id', index);
+        
+        // Style the list
+        const originalStyle = {
+            border: list.style.border,
+            backgroundColor: list.style.backgroundColor,
+            outline: list.style.outline,
+            position: list.style.position
+        };
+        
+        list.style.border = `3px solid ${config.borderColor}`;
+        list.style.backgroundColor = config.highlightColor;
+        list.style.outline = `2px dashed ${config.borderColor}`;
+        list.style.outlineOffset = '2px';
+        
+        // Store original styles for cleanup
+        list.setAttribute('data-original-styles', JSON.stringify(originalStyle));
+        
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'list-detector-overlay';
+        overlay.setAttribute('data-list-index', index);
+        
+        const rect = list.getBoundingClientRect();
+        overlay.style.cssText = `
+            position: fixed;
+            top: ${rect.top + window.scrollY}px;
+            left: ${rect.left + window.scrollX}px;
+            width: ${rect.width}px;
+            height: ${rect.height}px;
+            background: transparent;
+            cursor: pointer;
+            z-index: ${config.overlayZIndex};
+            pointer-events: auto;
+            border: 1px solid transparent;
+        `;
+        
+        // Add click handler
+        overlay.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Scroll to list
+            list.scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'center' 
+            });
+            
+            // Try to focus the list
+            setTimeout(() => {
+                if (list.tabIndex < 0) list.tabIndex = -1;
+                list.focus();
+                
+                // Add temporary focus ring
+                const originalOutline = list.style.outline;
+                list.style.outline = '3px solid #0066cc';
+                setTimeout(() => {
+                    list.style.outline = originalOutline;
+                }, 2000);
+            }, 500);
+        });
+        
+        document.body.appendChild(overlay);
+        
+        // Update overlay position on scroll/resize
+        function updateOverlayPosition() {
+            const newRect = list.getBoundingClientRect();
+            overlay.style.top = `${newRect.top + window.scrollY}px`;
+            overlay.style.left = `${newRect.left + window.scrollX}px`;
+            overlay.style.width = `${newRect.width}px`;
+            overlay.style.height = `${newRect.height}px`;
+        }
+        
+        window.addEventListener('scroll', updateOverlayPosition);
+        window.addEventListener('resize', updateOverlayPosition);
+        
+        return overlay;
+    }
+    
+    // Create navigation panel
+    function createNavigationPanel(lists) {
+        const panel = document.createElement('div');
+        panel.id = 'list-detector-panel';
+        panel.className = 'list-detector-panel';
+        
+        panel.innerHTML = `
+            <div class="panel-header">
+                <span class="panel-title">📋 List Detector (${lists.length})</span>
+                <button class="panel-minimize" title="Minimize">−</button>
+            </div>
+            <div class="panel-content">
+                <select class="list-selector" style="width: 100%; margin-bottom: 5px;">
+                    <option value="">Select a list...</option>
+                </select>
+                <div class="panel-buttons">
+                    <button class="go-button">Go to List</button>
+                    <button class="clear-button">Clear All</button>
+                </div>
+                <div class="panel-info">
+                    <small>Drag panel to move • Click highlighted lists to focus</small>
+                </div>
+            </div>
+        `;
+        
+        // Style the panel
+        panel.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 280px;
+            background: #fff;
+            border: 2px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            z-index: ${config.panelZIndex};
+            user-select: none;
+        `;
+        
+        // Style panel components
+        const style = document.createElement('style');
+        style.textContent = `
+            .panel-header {
+                background: #f0f0f0;
+                padding: 8px 12px;
+                border-bottom: 1px solid #ddd;
+                cursor: move;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-radius: 6px 6px 0 0;
+            }
+            .panel-title {
+                font-weight: bold;
+                font-size: 13px;
+            }
+            .panel-minimize {
+                background: none;
+                border: none;
+                font-size: 16px;
+                cursor: pointer;
+                padding: 0;
+                width: 20px;
+                height: 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .panel-content {
+                padding: 12px;
+            }
+            .panel-buttons {
+                display: flex;
+                gap: 5px;
+                margin-bottom: 5px;
+            }
+            .go-button, .clear-button {
+                flex: 1;
+                padding: 6px 8px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                background: #f9f9f9;
+                cursor: pointer;
+                font-size: 11px;
+            }
+            .go-button:hover, .clear-button:hover {
+                background: #e9e9e9;
+            }
+            .clear-button {
+                background: #ffe6e6;
+                border-color: #ffcccc;
+            }
+            .clear-button:hover {
+                background: #ffdddd;
+            }
+            .panel-info {
+                text-align: center;
+                color: #666;
+                margin-top: 5px;
+            }
+            .list-selector {
+                padding: 4px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                font-size: 11px;
+            }
+        `;
+        document.head.appendChild(style);
+        
+        // Populate dropdown
+        const select = panel.querySelector('.list-selector');
+        lists.forEach((list, index) => {
+            const option = document.createElement('option');
+            option.value = index;
+            
+            const tagName = list.tagName.toLowerCase();
+            const itemCount = list.children.length;
+            const id = list.id ? `#${list.id}` : '';
+            const className = list.className ? `.${list.className.split(' ')[0]}` : '';
+            
+            option.textContent = `${tagName.toUpperCase()}${id}${className} (${itemCount} items)`;
+            select.appendChild(option);
+        });
+        
+        // Add event listeners
+        const goButton = panel.querySelector('.go-button');
+        const clearButton = panel.querySelector('.clear-button');
+        const minimizeButton = panel.querySelector('.panel-minimize');
+        
+        goButton.addEventListener('click', () => {
+            const selectedIndex = select.value;
+            if (selectedIndex !== '') {
+                const list = lists[selectedIndex];
+                const overlay = document.querySelector(`[data-list-index="${selectedIndex}"]`);
+                if (overlay) {
+                    overlay.click();
+                }
+            }
+        });
+        
+        clearButton.addEventListener('click', () => {
+            clearAllHighlights();
+        });
+        
+        let isMinimized = false;
+        minimizeButton.addEventListener('click', () => {
+            const content = panel.querySelector('.panel-content');
+            if (isMinimized) {
+                content.style.display = 'block';
+                minimizeButton.textContent = '−';
+                minimizeButton.title = 'Minimize';
+            } else {
+                content.style.display = 'none';
+                minimizeButton.textContent = '+';
+                minimizeButton.title = 'Expand';
+            }
+            isMinimized = !isMinimized;
+        });
+        
+        // Make panel draggable
+        let isDragging = false;
+        let dragOffset = { x: 0, y: 0 };
+        
+        const header = panel.querySelector('.panel-header');
+        header.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            const rect = panel.getBoundingClientRect();
+            dragOffset.x = e.clientX - rect.left;
+            dragOffset.y = e.clientY - rect.top;
+            panel.style.opacity = '0.8';
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const x = e.clientX - dragOffset.x;
+                const y = e.clientY - dragOffset.y;
+                
+                // Keep panel within viewport
+                const maxX = window.innerWidth - panel.offsetWidth;
+                const maxY = window.innerHeight - panel.offsetHeight;
+                
+                panel.style.left = Math.max(0, Math.min(maxX, x)) + 'px';
+                panel.style.top = Math.max(0, Math.min(maxY, y)) + 'px';
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+            }
+        });
+        
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                panel.style.opacity = '1';
+            }
+        });
+        
+        document.body.appendChild(panel);
+        return panel;
+    }
+    
+    // Clear all highlights and cleanup
+    function clearAllHighlights() {
+        // Remove overlays
+        document.querySelectorAll('.list-detector-overlay').forEach(el => el.remove());
+        
+        // Restore original list styles
+        document.querySelectorAll('[data-list-detector-id]').forEach(list => {
+            const originalStyles = list.getAttribute('data-original-styles');
+            if (originalStyles) {
+                const styles = JSON.parse(originalStyles);
+                Object.keys(styles).forEach(prop => {
+                    list.style[prop] = styles[prop] || '';
+                });
+            }
+            list.removeAttribute('data-list-detector-id');
+            list.removeAttribute('data-original-styles');
+        });
+        
+        // Remove panel
+        const panel = document.getElementById('list-detector-panel');
+        if (panel) panel.remove();
+        
+        // Remove style
+        document.querySelectorAll('style').forEach(style => {
+            if (style.textContent.includes('.panel-header')) {
+                style.remove();
+            }
+        });
+        
+        window.listDetectorActive = false;
+        
+        console.log('List Detector cleared!');
+    }
+    
+    // Main execution
+    try {
+        const lists = findAllLists();
+        
+        if (lists.length === 0) {
+            alert('No lists found on this page!');
+            window.listDetectorActive = false;
+            return;
+        }
+        
+        console.log(`Found ${lists.length} lists:`, lists);
+        
+        // Highlight all lists
+        lists.forEach((list, index) => {
+            highlightList(list, index);
+        });
+        
+        // Create navigation panel
+        createNavigationPanel(lists);
+        
+        // Add keyboard shortcut (Ctrl+Shift+L) to clear
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.shiftKey && e.key === 'L') {
+                e.preventDefault();
+                clearAllHighlights();
+            }
+        });
+        
+        alert(`List Detector activated! Found ${lists.length} lists.\n\nFeatures:\n• Click highlighted lists to focus\n• Use panel to navigate\n• Drag panel to move\n• Press Ctrl+Shift+L to clear`);
+        
+    } catch (error) {
+        console.error('List Detector Error:', error);
+        alert('Error detecting lists: ' + error.message);
+        window.listDetectorActive = false;
+    }
+})();
