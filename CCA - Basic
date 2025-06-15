@@ -1,0 +1,707 @@
+javascript:(function() {
+
+    // --- 1. CORE LOGIC ---
+
+    /**
+     * Initiates the element selection mode.
+     * Displays a temporary banner and adds event listeners to the page.
+     */
+    function startElementSelection() {
+        // Display a temporary instruction banner
+        const banner = document.createElement("div");
+        banner.id = "cc-selection-banner";
+        banner.style.cssText = `
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 999999;
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 5px;
+            padding: 10px 15px;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        `;
+       
+
+        // Add listeners for highlighting and selecting an element
+        document.body.addEventListener("mouseover", highlightElement);
+        document.body.addEventListener("mouseout", removeHighlight);
+        document.body.addEventListener("click", handleElementSelection);
+    }
+
+    /**
+     * Highlights an element with a blue outline on mouseover.
+     * @param {MouseEvent} event - The mouseover event.
+     */
+    function highlightElement(event) {
+        if (event.target.closest('#cc-selection-banner') || 
+            event.target.closest('#contrast-checker-panel') || 
+            event.target.closest('#quick-nav-panel')) {
+            return;
+        }
+
+        const element = event.target;
+        // Get the initial colors using the same logic as getElementColors
+        const initialColors = getElementColors(element);
+        
+        // Store the initial colors
+        element.dataset.beforeHoverColor = initialColors.foreground;
+        element.dataset.beforeHoverBackgroundColor = initialColors.background;
+
+        // Apply hover styles
+        element.style.outline = "2px solid #007bff";
+        element.style.outlineOffset = "1px";
+    }
+
+    /**
+     * Removes the highlight from an element on mouseout.
+     * @param {MouseEvent} event - The mouseout event.
+     */
+    function removeHighlight(event) {
+        event.target.style.outline = "";
+        event.target.style.outlineOffset = "";
+    }
+
+    /**
+     * The main function that runs after an element is clicked.
+     * It cleans up the selection listeners and starts the color analysis.
+     * @param {MouseEvent} event - The click event.
+     */
+    function handleElementSelection(event) {
+        // Don't handle clicks on our UI elements
+        if (event.target.closest('#cc-selection-banner') || 
+            event.target.closest('#contrast-checker-panel') || 
+            event.target.closest('#quick-nav-panel')) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        // Clean up banner and event listeners
+        document.getElementById("cc-selection-banner")?.remove();
+        document.body.removeEventListener("mouseover", highlightElement);
+        document.body.removeEventListener("mouseout", removeHighlight);
+        document.body.removeEventListener("click", handleElementSelection);
+
+        const selectedElement = event.target;
+        
+        // Use the stored initial colors
+        const beforeColors = {
+            foreground: selectedElement.dataset.beforeHoverColor,
+            background: selectedElement.dataset.beforeHoverBackgroundColor
+        };
+
+        // Get current colors
+        const afterColors = getElementColors(selectedElement);
+
+        // Create panel with both sets of colors
+        createResultsPanel({
+            before: beforeColors,
+            after: {
+                foreground: afterColors.foreground,
+                background: afterColors.background
+            },
+            element: selectedElement,
+            warning: afterColors.warning
+        });
+    }
+
+    /**
+     * Validates if a color string is in a valid RGB or RGBA format.
+     * @param {string} color - The color string to validate.
+     * @returns {boolean} True if the color is valid, false otherwise.
+     */
+    function validateColor(color) {
+        const rgbRegex = /^rgb(a)?\((\d{1,3},\s?){2,3}\d{1,3}(,\s?(0|1|0?\.\d+))?\)$/;
+        return rgbRegex.test(color);
+    }
+
+    /**
+     * Determines the effective foreground and background colors of an element.
+     * It traverses up the DOM tree to find a non-transparent background.
+     * @param {HTMLElement} element - The element to analyze.
+     * @returns {Object} An object containing foreground, background, and a potential warning.
+     */
+    function getElementColors(element) {
+        let backgroundColor;
+        let currentElement = element;
+        let backgroundWarning = false;
+
+        // Traverse up the DOM to find the true background color
+        while (currentElement && currentElement.tagName !== 'BODY') {
+            const style = window.getComputedStyle(currentElement);
+
+            // Check for background images or gradients
+            if (style.backgroundImage !== 'none') {
+                backgroundWarning = true;
+                // We stop here because we can't reliably determine the color behind an image
+            }
+            
+            const bgColor = style.backgroundColor;
+            if (bgColor && bgColor !== 'rgba(0, 0, 0, 0)' && bgColor !== 'transparent') {
+                backgroundColor = bgColor;
+                break; // Found a solid color, so we stop.
+            }
+            
+            if (backgroundWarning) break; // Don't look further up if a BG image was found
+
+            currentElement = currentElement.parentElement;
+        }
+
+        // If no background color was found, default to the body's background or white
+        if (!backgroundColor) {
+            const bodyStyle = window.getComputedStyle(document.body);
+            backgroundColor = bodyStyle.backgroundColor;
+            if (!backgroundColor || backgroundColor === 'rgba(0, 0, 0, 0)' || backgroundColor === 'transparent') {
+                const htmlStyle = window.getComputedStyle(document.documentElement);
+                backgroundColor = htmlStyle.backgroundColor || 'rgb(255, 255, 255)';
+            }
+        }
+
+        // Get the foreground color, recursively finding the parent's color if it's transparent
+        const getForegroundColor = (el) => {
+            if (!el || el === document.documentElement) return 'rgb(0, 0, 0)'; // Default to black
+            const color = window.getComputedStyle(el).color;
+            // If color is transparent, check the parent
+            if (color === 'rgba(0, 0, 0, 0)' || color === 'transparent') {
+                return getForegroundColor(el.parentElement);
+            }
+            return color;
+        };
+
+        const foregroundColor = getForegroundColor(element);
+        
+        return {
+            foreground: foregroundColor,
+            background: backgroundColor,
+            warning: backgroundWarning
+        };
+    }
+
+    // --- 2. WCAG CONTRAST CALCULATION ---
+
+    /**
+     * Parses an RGB/RGBA color string into an object.
+     * @param {string} colorString - e.g., "rgb(255, 255, 255)" or "rgba(255, 255, 255, 0.5)".
+     * @returns {{r: number, g: number, b: number, a: number}}
+     */
+    function parseRgb(colorString) {
+        if (!colorString) return { r: 0, g: 0, b: 0, a: 1 };
+        
+        // Handle hex colors
+        if (colorString.startsWith('#')) {
+            const hex = colorString.slice(1);
+            if (hex.length === 3) {
+                return {
+                    r: parseInt(hex[0] + hex[0], 16),
+                    g: parseInt(hex[1] + hex[1], 16),
+                    b: parseInt(hex[2] + hex[2], 16),
+                    a: 1
+                };
+            } else if (hex.length === 6) {
+                return {
+                    r: parseInt(hex.slice(0, 2), 16),
+                    g: parseInt(hex.slice(2, 4), 16),
+                    b: parseInt(hex.slice(4, 6), 16),
+                    a: 1
+                };
+            }
+        }
+        
+        // Handle rgb/rgba
+        const matches = colorString.match(/[\d.]+/g);
+        if (matches && matches.length >= 3) {
+            return {
+                r: parseInt(matches[0]),
+                g: parseInt(matches[1]),
+                b: parseInt(matches[2]),
+                a: matches[3] ? parseFloat(matches[3]) : 1
+            };
+        }
+        return { r: 0, g: 0, b: 0, a: 1 };
+    }
+
+    /**
+     * Calculates the relative luminance of a single RGB channel.
+     * @param {number} color - The color value (0-255).
+     * @returns {number} The linearized color value.
+     */
+    function linearizeColor(color) {
+        const sRGB = color / 255;
+        return (sRGB <= 0.03928) ? sRGB / 12.92 : Math.pow((sRGB + 0.055) / 1.055, 2.4);
+    }
+
+    /**
+     * Calculates the relative luminance of a full RGB color.
+     * @param {string} rgbString - The RGB color string.
+     * @returns {number} The relative luminance (L).
+     */
+    function getLuminance(rgbString) {
+        const { r, g, b } = parseRgb(rgbString);
+        const R = linearizeColor(r);
+        const G = linearizeColor(g);
+        const B = linearizeColor(b);
+        return 0.2126 * R + 0.7152 * G + 0.0722 * B;
+    }
+
+    /**
+     * Calculates the contrast ratio between two RGB colors.
+     * @param {string} color1 - The first RGB color string.
+     * @param {string} color2 - The second RGB color string.
+     * @returns {number} The contrast ratio.
+     */
+    function calculateContrastRatio(color1, color2) {
+        const lum1 = getLuminance(color1);
+        const lum2 = getLuminance(color2);
+        const lighter = Math.max(lum1, lum2);
+        const darker = Math.min(lum1, lum2);
+        return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    // --- 3. UI PANELS ---
+    
+    /**
+     * Creates and displays the main results panel.
+     * @param {Object} colors - Object containing before and after hover colors.
+     * @param {HTMLElement} element - The selected element.
+     * @param {boolean} hasWarning - Whether to show the background image warning.
+     */
+    function createResultsPanel({ before, after, element, warning: hasWarning }) {
+        // Remove any existing panel
+        let panel = document.getElementById("contrast-checker-panel");
+        if (panel) {
+            panel.remove();
+        }
+
+        const beforeRatio = calculateContrastRatio(before.foreground, before.background).toFixed(2);
+        const afterRatio = calculateContrastRatio(after.foreground, after.background).toFixed(2);
+        const style = window.getComputedStyle(element);
+        const fontSize = parseFloat(style.fontSize);
+        const fontWeight = style.fontWeight;
+
+        // WCAG defines "large text" as 18pt (24px) or 14pt (18.66px) bold.
+        const isLargeText = fontSize >= 24 || (fontSize >= 18.66 && (fontWeight === 'bold' || parseInt(fontWeight) >= 700));
+
+        const aaNormal = 4.5;
+        const aaaNormal = 7;
+        const aaLarge = 3;
+        const aaaLarge = 4.5;
+
+        const getStatus = (neededRatio) => {
+            // For AA level, if text is large, 3:1 is sufficient
+            let effectiveRatio = neededRatio;
+            if (neededRatio === aaNormal && isLargeText) {
+                effectiveRatio = aaLarge; // Use 3:1 for large text at AA level
+            }
+            const passes = parseFloat(afterRatio) >= effectiveRatio;
+            const statusText = passes ? "PASS" : "FAIL";
+            const color = passes ? "#28a745" : "#dc3545";
+            const icon = passes ? "✓" : "✗";
+            return `<span style="color:${color}; font-weight: bold;">${icon} ${statusText}</span> (${effectiveRatio}:1 required)`;
+        };
+
+        panel = document.createElement("div");
+        panel.id = "contrast-checker-panel";
+        panel.style.cssText = `
+            position: fixed;
+            top: 50px;
+            right: 10px;
+            z-index: 9999999;
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px;
+            width: 320px;
+            max-height: 90vh;
+            overflow-y: auto;
+        `;
+
+        const textSizeInfo = isLargeText ? 
+            `<span style="color: #28a745;">Large text (${fontSize.toFixed(1)}px)</span>` : 
+            `<span style="color: #6c757d;">Normal text (${fontSize.toFixed(1)}px)</span>`;
+
+        panel.innerHTML = `
+            <div id="contrast-panel-header" style="padding: 12px 15px; background: linear-gradient(135deg, #007bff, #0056b3); color: white; cursor: move; border-top-left-radius: 7px; border-top-right-radius: 7px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+                <span>🎨 Contrast Results</span>
+                <span style="cursor: pointer; opacity: 0.8;" onclick="document.getElementById('contrast-checker-panel').remove()">×</span>
+            </div>
+            <div style="padding: 15px;">
+                <div style="margin-bottom: 15px;">
+                    <strong>Element:</strong> &lt;${element.tagName.toLowerCase()}&gt;
+                    <br><strong>Text size:</strong> ${textSizeInfo}
+                </div>
+                
+                <div style="border: 1px solid #eee; border-radius: 6px; margin-bottom: 15px;">
+                    <div style="padding: 10px; border-bottom: 1px solid #eee;">
+                        <div style="font-size: 12px; font-weight: bold; color: #666; margin-bottom: 8px;">Before Hover</div>
+                        <div style="display: flex; gap: 10px;">
+                            <div style="flex: 1;">
+                                <div style="font-size: 11px; color: #666;">Foreground</div>
+                                <div style="display: flex; align-items: center; gap: 4px; margin-top: 4px;">
+                                    <div style="width: 20px; height: 20px; border: 1px solid #ddd; border-radius: 3px; background-color: ${before.foreground};"></div>
+                                    <code style="font-size: 10px; background: #f8f9fa; padding: 2px 4px; border-radius: 2px;">${before.foreground}</code>
+                                </div>
+                            </div>
+                            <div style="flex: 1;">
+                                <div style="font-size: 11px; color: #666;">Background</div>
+                                <div style="display: flex; align-items: center; gap: 4px; margin-top: 4px;">
+                                    <div style="width: 20px; height: 20px; border: 1px solid #ddd; border-radius: 3px; background-color: ${before.background};"></div>
+                                    <code style="font-size: 10px; background: #f8f9fa; padding: 2px 4px; border-radius: 2px;">${before.background}</code>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="text-align: center; margin-top: 8px; font-size: 12px;">
+                            Contrast Ratio: <strong>${beforeRatio}:1</strong>
+                        </div>
+                    </div>
+                    <div style="padding: 10px;">
+                        <div style="font-size: 12px; font-weight: bold; color: #666; margin-bottom: 8px;">On Hover</div>
+                        <div style="display: flex; gap: 10px;">
+                            <div style="flex: 1;">
+                                <div style="font-size: 11px; color: #666;">Foreground</div>
+                                <div style="display: flex; align-items: center; gap: 4px; margin-top: 4px;">
+                                    <div style="width: 20px; height: 20px; border: 1px solid #ddd; border-radius: 3px; background-color: ${after.foreground};"></div>
+                                    <code style="font-size: 10px; background: #f8f9fa; padding: 2px 4px; border-radius: 2px;">${after.foreground}</code>
+                                </div>
+                            </div>
+                            <div style="flex: 1;">
+                                <div style="font-size: 11px; color: #666;">Background</div>
+                                <div style="display: flex; align-items: center; gap: 4px; margin-top: 4px;">
+                                    <div style="width: 20px; height: 20px; border: 1px solid #ddd; border-radius: 3px; background-color: ${after.background};"></div>
+                                    <code style="font-size: 10px; background: #f8f9fa; padding: 2px 4px; border-radius: 2px;">${after.background}</code>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="text-align: center; margin-top: 8px; font-size: 12px;">
+                            Contrast Ratio: <strong>${afterRatio}:1</strong>
+                        </div>
+                    </div>
+                </div>
+
+                ${hasWarning ? `
+                    <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 6px; padding: 10px; margin-bottom: 15px;">
+                        <div style="color: #856404; font-size: 12px;">
+                            ⚠️ <strong>Warning:</strong> Background image/gradient detected. Actual contrast may vary.
+                        </div>
+                    </div>
+                ` : ''}
+                
+                <div style="border-top: 1px solid #eee; padding-top: 15px;">
+                    <div style="font-size: 12px; font-weight: bold; margin-bottom: 10px; color: #495057;">WCAG 2.1 Compliance</div>
+                    <div style="display: grid; gap: 8px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: #f8f9fa; border-radius: 4px;">
+                            <span style="font-size: 12px;">AA Normal</span>
+                            <span style="font-size: 12px;">${getStatus(aaNormal)}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: #f8f9fa; border-radius: 4px;">
+                            <span style="font-size: 12px;">AAA Normal</span>
+                            <span style="font-size: 12px;">${getStatus(aaaNormal)}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: #f8f9fa; border-radius: 4px;">
+                            <span style="font-size: 12px;">AA Large</span>
+                            <span style="font-size: 12px;">${getStatus(aaLarge)}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: #f8f9fa; border-radius: 4px;">
+                            <span style="font-size: 12px;">AAA Large</span>
+                            <span style="font-size: 12px;">${getStatus(aaaLarge)}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 15px; display: grid; gap: 8px;">
+                    <button id="check-another-elem" style="width:100%; padding:10px; background: linear-gradient(135deg, #28a745, #20c997); color:white; border:none; border-radius:6px; cursor:pointer; font-weight: 500; transition: all 0.2s;">🎯 Check Another Element</button>
+                    <button id="close-contrast-panel" style="width:100%; padding:8px; background:#6c757d; color:white; border:none; border-radius:6px; cursor:pointer; font-size: 12px;">Close</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(panel);
+        
+        // Add event listeners for the panel's buttons
+        document.getElementById("check-another-elem").addEventListener("click", () => {
+            panel.remove();
+            startElementSelection();
+        });
+        document.getElementById("close-contrast-panel").addEventListener("click", () => panel.remove());
+        
+        // Add hover effects
+        const buttons = panel.querySelectorAll('button');
+        buttons.forEach(btn => {
+            btn.addEventListener('mouseenter', () => {
+                btn.style.transform = 'translateY(-1px)';
+                btn.style.filter = 'brightness(1.1)';
+            });
+            btn.addEventListener('mouseleave', () => {
+                btn.style.transform = 'translateY(0)';
+                btn.style.filter = 'brightness(1)';
+            });
+        });
+        
+        // Make the panel draggable
+        makeDraggable(panel, document.getElementById('contrast-panel-header'));
+    }
+
+    /**
+     * Creates the Quick Navigation panel for jumping to elements.
+     */
+    function createNavPanel() {
+        let panel = document.getElementById("quick-nav-panel");
+        if (panel) return; // Don't create if it already exists
+
+        panel = document.createElement("div");
+        panel.id = "quick-nav-panel";
+        panel.style.cssText = `
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            z-index: 9999998;
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px;
+            width: 280px;
+        `;
+        
+        panel.innerHTML = `
+            <div id="quick-nav-header" style="padding: 12px 15px; background: linear-gradient(135deg, #6f42c1, #5a2d91); color: white; cursor: move; border-top-left-radius: 7px; border-top-right-radius: 7px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+                <span>🧭 Quick Navigation</span>
+                <span style="cursor: pointer; opacity: 0.8;" onclick="document.getElementById('quick-nav-panel').remove()">×</span>
+            </div>
+            <div style="padding:15px;">
+                <div style="margin-bottom: 10px;">
+                    <select id="element-jumper" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; background: white;"></select>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button id="go-to-element" style="flex: 1; padding: 8px 12px; background: linear-gradient(135deg, #007bff, #0056b3); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Go</button>
+                    <button id="refresh-nav" style="padding: 8px 12px; background: #f8f9fa; border: 1px solid #ddd; border-radius: 4px; cursor: pointer;">🔄</button>
+                </div>
+                <button id="close-quick-nav" style="width:100%; padding:8px; margin-top:10px; background:#6c757d; color:white; border:none; border-radius:4px; cursor:pointer; font-size: 12px;">Close</button>
+            </div>
+        `;
+        document.body.appendChild(panel);
+        
+        // Add functionality to the buttons
+        document.getElementById("go-to-element").addEventListener("click", () => {
+            const xpath = document.getElementById("element-jumper").value;
+            if (xpath) {
+                const element = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                if (element) {
+                    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // Briefly highlight the element
+                    element.style.transition = 'outline 0.3s ease-in-out';
+                    element.style.outline = '3px solid #ff6b6b';
+                    element.style.outlineOffset = '2px';
+                    setTimeout(() => { 
+                        element.style.outline = '';
+                        element.style.outlineOffset = '';
+                    }, 2000);
+                }
+            }
+        });
+        
+        document.getElementById("refresh-nav").addEventListener("click", () => {
+            populateNavDropdown();
+        });
+        
+        document.getElementById("close-quick-nav").addEventListener("click", () => panel.remove());
+
+        populateNavDropdown();
+        makeDraggable(panel, document.getElementById('quick-nav-header'));
+    }
+
+    /**
+     * Finds interactive elements and populates the navigation dropdown.
+     */
+    function populateNavDropdown() {
+        const select = document.getElementById("element-jumper");
+        if (!select) return;
+        
+        select.innerHTML = '<option value="">Select an element...</option>';
+
+        const elements = document.querySelectorAll('a[href], button, input, select, textarea, [role="button"], [role="link"], [tabindex]:not([tabindex="-1"]), h1, h2, h3, h4, h5, h6');
+        const options = [];
+
+        elements.forEach((el, index) => {
+            // Check if element is visible and not part of our tool
+            const isVisible = !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+            const isOurElement = el.closest('#contrast-checker-panel') || el.closest('#quick-nav-panel') || el.closest('#cc-selection-banner');
+            
+            if (isVisible && !isOurElement) {
+                const xpath = getXPathForElement(el);
+                if (xpath) {
+                    let text = el.innerText || el.textContent || el.value || el.alt || el.title || el.ariaLabel || el.id || el.className;
+                    text = text.replace(/\s+/g, ' ').trim().substring(0, 40);
+                    
+                    const tagName = el.tagName.toLowerCase();
+                    const displayText = text ? `${tagName}: ${text}` : `${tagName} (${index + 1})`;
+                    
+                    options.push({
+                        value: xpath,
+                        text: displayText,
+                        element: el
+                    });
+                }
+            }
+        });
+
+        // Sort options by tag name then by text
+        options.sort((a, b) => {
+            const tagA = a.element.tagName;
+            const tagB = b.element.tagName;
+            if (tagA !== tagB) return tagA.localeCompare(tagB);
+            return a.text.localeCompare(b.text);
+        });
+
+        options.forEach(opt => {
+            const option = document.createElement("option");
+            option.value = opt.value;
+            option.textContent = opt.text;
+            select.appendChild(option);
+        });
+    }
+
+    // --- 4. UTILITY FUNCTIONS ---
+
+    /**
+     * Makes a given panel draggable by its header element.
+     * @param {HTMLElement} panel - The panel to make draggable.
+     * @param {HTMLElement} header - The part of the panel that acts as a handle.
+     */
+    function makeDraggable(panel, header) {
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let initialX = 0;
+        let initialY = 0;
+
+        header.style.userSelect = 'none';
+
+        header.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            isDragging = true;
+            
+            startX = e.clientX;
+            startY = e.clientY;
+            initialX = panel.offsetLeft;
+            initialY = panel.offsetTop;
+            
+            header.style.cursor = 'grabbing';
+            document.body.style.userSelect = 'none';
+
+            const handleMouseMove = function(e) {
+                if (!isDragging) return;
+                
+                e.preventDefault();
+                const deltaX = e.clientX - startX;
+                const deltaY = e.clientY - startY;
+                
+                let newX = initialX + deltaX;
+                let newY = initialY + deltaY;
+                
+                // Keep panel within viewport bounds
+                const maxX = window.innerWidth - panel.offsetWidth;
+                const maxY = window.innerHeight - panel.offsetHeight;
+                
+                newX = Math.max(0, Math.min(newX, maxX));
+                newY = Math.max(0, Math.min(newY, maxY));
+                
+                panel.style.left = newX + 'px';
+                panel.style.top = newY + 'px';
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+            };
+
+            const handleMouseUp = function() {
+                isDragging = false;
+                header.style.cursor = 'move';
+                document.body.style.userSelect = '';
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+            };
+
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+        });
+    }
+
+    /**
+     * Generates a unique XPath for a given element.
+     * @param {HTMLElement} element - The element to generate an XPath for.
+     * @returns {string} The calculated XPath.
+     */
+    function getXPathForElement(element) {
+        // If element has a unique ID, use it
+        if (element.id && document.querySelectorAll(`#${element.id}`).length === 1) {
+            return `//*[@id="${element.id}"]`;
+        }
+        
+        // If we reach the body, we're done
+        if (element === document.body) {
+            return '/html/body';
+        }
+        
+        if (element === document.documentElement) {
+            return '/html';
+        }
+
+        // Build path by going up the tree
+        let path = '';
+        let current = element;
+        
+        while (current && current !== document.documentElement) {
+            let selector = current.tagName.toLowerCase();
+            
+            if (current.id && document.querySelectorAll(`#${current.id}`).length === 1) {
+                path = `//*[@id="${current.id}"]` + path;
+                break;
+            } else {
+                // Count siblings of the same tag
+                let siblings = Array.from(current.parentNode.children).filter(e => e.tagName === current.tagName);
+                if (siblings.length > 1) {
+                    let index = siblings.indexOf(current) + 1;
+                    selector += `[${index}]`;
+                }
+                path = '/' + selector + path;
+            }
+            
+            current = current.parentNode;
+        }
+        
+        return path.startsWith('/html') ? path : '/html' + path;
+    }
+
+    // --- 5. INITIALIZATION ---
+
+    /**
+     * Main entry point. Closes existing panels or starts the tool.
+     */
+    function init() {
+        const resultsPanel = document.getElementById("contrast-checker-panel");
+        const navPanel = document.getElementById("quick-nav-panel");
+        const banner = document.getElementById("cc-selection-banner");
+
+        if (resultsPanel || navPanel || banner) {
+            resultsPanel?.remove();
+            navPanel?.remove();
+            banner?.remove();
+            // Clean up any remaining event listeners
+            document.body.removeEventListener("mouseover", highlightElement);
+            document.body.removeEventListener("mouseout", removeHighlight);
+            document.body.removeEventListener("click", handleElementSelection);
+        } else {
+            startElementSelection();
+            createNavPanel();
+        }
+    }
+
+    init();
+
+})();
