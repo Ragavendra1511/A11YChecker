@@ -1,0 +1,964 @@
+javascript:(function(){
+    // Remove existing checker if present
+    if (window.formLabelChecker) {
+      window.formLabelChecker.cleanup();
+    }
+  
+    window.formLabelChecker = {
+      selectedElements: [],
+      navigationPanel: null,
+      overlay: null,
+      isSelecting: false,
+      
+      // Comprehensive form field selectors covering HTML5 and ARIA patterns
+      formFieldSelectors: [
+        'input[type="text"]', 'input[type="email"]', 'input[type="password"]', 
+        'input[type="tel"]', 'input[type="url"]', 'input[type="search"]',
+        'input[type="number"]', 'input[type="range"]', 'input[type="date"]',
+        'input[type="datetime-local"]', 'input[type="month"]', 'input[type="week"]',
+        'input[type="time"]', 'input[type="color"]', 'input[type="file"]',
+        'input[type="checkbox"]', 'input[type="radio"]',
+        'textarea', 'select', 'button[type="submit"]', 'button[type="button"]',
+        'input[type="submit"]', 'input[type="button"]', 'input[type="reset"]',
+        '[role="textbox"]', '[role="combobox"]', '[role="listbox"]',
+        '[role="slider"]', '[role="spinbutton"]', '[role="searchbox"]',
+        '[role="switch"]', '[role="checkbox"]', '[role="radio"]',
+        '[role="button"]', '[contenteditable="true"]',
+        // Custom component selectors
+        '.bootstrap-select', '.select2-container', '.chosen-container'
+      ],
+  
+      init: function() {
+        this.createStyles();
+        this.showOverlay();
+      },
+  
+      createStyles: function() {
+        const style = document.createElement('style');
+        style.id = 'form-label-checker-styles';
+        style.textContent = `
+          .flc-highlight { 
+            outline: 3px solid #ff6b6b !important; 
+            outline-offset: 2px !important;
+            background: rgba(255, 107, 107, 0.1) !important;
+            cursor: pointer !important;
+          }
+          .flc-selected { 
+            outline: 3px solid #4ecdc4 !important; 
+            outline-offset: 2px !important;
+            background: rgba(78, 205, 196, 0.2) !important;
+          }
+          .flc-panel {
+            position: fixed !important;
+            bottom: 20px !important;
+            right: 20px !important;
+            width: 350px !important;
+            max-height: 400px !important;
+            background: white !important;
+            border: 2px solid #333 !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
+            z-index: 10000 !important;
+            font-family: Arial, sans-serif !important;
+            font-size: 14px !important;
+            overflow: hidden !important;
+          }
+          .flc-panel-header {
+            background: #333 !important;
+            color: white !important;
+            padding: 10px !important;
+            cursor: move !important;
+            display: flex !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+          }
+          .flc-panel-content {
+            padding: 15px !important;
+            max-height: 300px !important;
+            overflow-y: auto !important;
+          }
+          .flc-button {
+            background: #4ecdc4 !important;
+            color: white !important;
+            border: none !important;
+            padding: 8px 12px !important;
+            border-radius: 4px !important;
+            cursor: pointer !important;
+            margin: 5px !important;
+            font-size: 12px !important;
+          }
+          .flc-button:hover { background: #45b7aa !important; }
+          .flc-button.danger { background: #ff6b6b !important; }
+          .flc-button.danger:hover { background: #ff5252 !important; }
+          .flc-select {
+            width: 100% !important;
+            padding: 8px !important;
+            margin: 10px 0 !important;
+            border: 1px solid #ddd !important;
+            border-radius: 4px !important;
+          }
+          .flc-result {
+            margin: 10px 0 !important;
+            padding: 10px !important;
+            border-radius: 4px !important;
+            border-left: 4px solid #ddd !important;
+          }
+          .flc-result.success { 
+            background: #d4edda !important; 
+            border-left-color: #28a745 !important; 
+            color: #155724 !important;
+          }
+          .flc-result.warning { 
+            background: #fff3cd !important; 
+            border-left-color: #ffc107 !important; 
+            color: #856404 !important;
+          }
+          .flc-result.error { 
+            background: #f8d7da !important; 
+            border-left-color: #dc3545 !important; 
+            color: #721c24 !important;
+          }
+          .flc-overlay {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            background: rgba(0,0,0,0.3) !important;
+            z-index: 9999 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            pointer-events: none !important;
+          }
+          .flc-instruction {
+            background: white !important;
+            padding: 20px !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
+            text-align: center !important;
+            font-family: Arial, sans-serif !important;
+          }
+        `;
+        document.head.appendChild(style);
+      },
+  
+      showOverlay: function() {
+        // Create a non-blocking instruction panel with a "Start Selection" button
+        this.overlay = document.createElement('div');
+        this.overlay.className = 'flc-panel';
+        this.overlay.style.cssText = `
+            position: fixed !important;
+            top: 20px !important;
+            right: 20px !important;
+            left: auto !important;
+            bottom: auto !important;
+            width: 300px !important;
+            z-index: 10000 !important;
+        `;
+        this.overlay.innerHTML = `
+            <div class="flc-panel-header">
+                <span>Form Label Checker</span>
+            </div>
+            <div class="flc-panel-content">
+                <p style="margin: 0 0 10px 0 !important; font-size: 14px !important;">
+                    Click "Start Selection" to begin selecting form fields for analysis.
+                </p>
+                <div style="text-align: center !important;">
+                    <button class="flc-button" id="start-selection-button">
+                        Start Selection
+                    </button>
+                    <button class="flc-button danger" onclick="window.formLabelChecker.cleanup()">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(this.overlay);
+
+        // Add event listener to the "Start Selection" button
+        const startButton = document.getElementById('start-selection-button');
+        startButton.addEventListener('click', () => this.startSelection());
+
+        // Make the overlay draggable
+        this.makeDraggable(this.overlay, this.overlay.querySelector('.flc-panel-header'));
+      },
+  
+      startSelection: function() {
+        // Enable form field selection
+        this.isSelecting = true;
+
+        // Update the overlay content to show instructions for selecting fields
+        const overlayContent = this.overlay.querySelector('.flc-panel-content');
+        overlayContent.innerHTML = `
+            <p style="margin: 0 0 10px 0 !important; font-size: 14px !important;">
+                Click on highlighted form fields to select them for analysis. Selected fields will turn teal.
+            </p>
+            <div style="text-align: center !important;">
+                <button class="flc-button" onclick="window.formLabelChecker.finishSelection()">
+                    Analyze Selected Fields
+                </button>
+                <button class="flc-button danger" onclick="window.formLabelChecker.cleanup()">
+                    Cancel
+                </button>
+            </div>
+            <div id="selection-counter" style="margin-top: 10px !important; text-align: center !important; font-weight: bold !important; color: #4ecdc4 !important;">
+                Selected: 0 fields
+            </div>
+        `;
+
+        // Highlight form fields and add event listeners for selection
+        this.highlightFormFields();
+        this.addEventListeners();
+      },
+  
+      highlightFormFields: function() {
+        const fields = document.querySelectorAll(this.formFieldSelectors.join(','));
+        fields.forEach(field => {
+          if (this.isFormField(field)) {
+            field.classList.add('flc-highlight');
+          }
+        });
+      },
+  
+      addEventListeners: function() {
+        document.addEventListener('click', this.handleClick.bind(this), true);
+      },
+  
+      handleClick: function(e) {
+        if (!this.isSelecting) return;
+        
+        if (e.target.closest('.flc-panel')) {
+          return;
+        }
+  
+        if (this.isFormField(e.target)) {
+          e.preventDefault();
+          e.stopPropagation();
+          this.toggleSelection(e.target);
+          this.updateSelectionCounter();
+        }
+      },
+  
+      isFormField: function(element) {
+        const tagName = element.tagName.toLowerCase();
+        const type = element.type;
+        const role = element.getAttribute('role');
+        const contentEditable = element.contentEditable === 'true';
+        const className = element.className || '';
+        
+        // Check for custom select components first
+        if (this.isCustomSelectComponent(element)) {
+          return true;
+        }
+        
+        // Original form field detection
+        return (
+          (tagName === 'input' && type !== 'hidden') ||
+          tagName === 'textarea' ||
+          tagName === 'select' ||
+          tagName === 'button' ||
+          contentEditable ||
+          (role && ['textbox', 'combobox', 'listbox', 'slider', 'spinbutton', 
+                    'searchbox', 'switch', 'checkbox', 'radio', 'button'].includes(role))
+        );
+      },
+  
+      isCustomSelectComponent: function(element) {
+        const className = element.className || '';
+        
+        // Bootstrap Select
+        if (className.includes('bootstrap-select')) {
+          return true;
+        }
+        
+        // Select2
+        if (className.includes('select2-container')) {
+          return true;
+        }
+        
+        // Chosen
+        if (className.includes('chosen-container')) {
+          return true;
+        }
+        
+        // Check if element contains a hidden select (common pattern)
+        const hiddenSelect = element.querySelector('select[style*="display: none"], select[style*="display:none"], select[tabindex="-98"], select.selectpicker');
+        if (hiddenSelect) {
+          return true;
+        }
+        
+        return false;
+      },
+  
+      getActualFormElement: function(element) {
+        // If it's a custom component, try to find the actual form element
+        if (this.isCustomSelectComponent(element)) {
+            // Look for hidden select within the component
+            let actualSelect = element.querySelector('select');
+            if (actualSelect) {
+                return actualSelect;
+            }
+
+            // Look for select in parent container
+            const parent = element.parentElement;
+            if (parent) {
+                actualSelect = parent.querySelector('select');
+                if (actualSelect) {
+                    return actualSelect;
+                }
+            }
+
+            // If no select is found, return the original element
+            return element;
+        }
+
+        // For non-custom components, return the element itself
+        return element;
+      },
+  
+      toggleSelection: function(element) {
+        const index = this.selectedElements.indexOf(element);
+        if (index > -1) {
+          this.selectedElements.splice(index, 1);
+          element.classList.remove('flc-selected');
+        } else {
+          this.selectedElements.push(element);
+          element.classList.add('flc-selected');
+        }
+      },
+  
+      updateSelectionCounter: function() {
+        const counter = document.getElementById('selection-counter');
+        if (counter) {
+          counter.textContent = `Selected: ${this.selectedElements.length} fields`;
+        }
+      },
+  
+      finishSelection: function() {
+        this.isSelecting = false;
+        document.removeEventListener('click', this.handleClick.bind(this), true);
+        
+        if (this.overlay) {
+          this.overlay.remove();
+          this.overlay = null;
+        }
+        
+        this.removeHighlights();
+        
+        if (this.selectedElements.length === 0) {
+          alert('No form fields selected. Please try again.');
+          this.cleanup();
+          return;
+        }
+        
+        this.analyzeSelectedFields();
+        this.createNavigationPanel();
+      },
+  
+      removeHighlights: function() {
+        document.querySelectorAll('.flc-highlight').forEach(el => {
+          el.classList.remove('flc-highlight');
+        });
+      },
+  
+      analyzeSelectedFields: function() {
+        this.results = this.selectedElements.map((element, index) => {
+          return this.analyzeField(element, index);
+        });
+      },
+  
+      analyzeField: function(element, index) {
+        // Get the actual form element (in case of custom components)
+        const actualElement = this.getActualFormElement(element);
+        const displayElement = element; // Keep reference to what user clicked
+        
+        const analysis = {
+          element: actualElement,
+          displayElement: displayElement,
+          index: index,
+          xpath: this.getXPath(actualElement),
+          tagName: actualElement.tagName.toLowerCase(),
+          type: actualElement.type || actualElement.getAttribute('role') || 'unknown',
+          id: actualElement.id || '',
+          name: actualElement.name || '',
+          isCustomComponent: actualElement !== displayElement,
+          customComponentType: this.getCustomComponentType(displayElement),
+          hasAccessibleLabel: false,
+          hasVisibleLabel: false,
+          labelSources: [],
+          issues: [],
+          recommendations: []
+        };
+  
+        // Check if the element is hidden
+        const hiddenInfo = this.isHidden(actualElement);
+        if (hiddenInfo.isHidden) {
+            analysis.status = 'warning';
+            analysis.issues.push('Element is hidden due to: ' + hiddenInfo.reasons.join(', '));
+            if (hiddenInfo.reasons.some(r => r.includes('tabindex'))) {
+                analysis.recommendations.push('Verify if the negative tabindex is intentional. If the element should be interactive, consider removing or updating the tabindex');
+            }
+            analysis.recommendations.push('Check with a screen reader to verify the intended behavior');
+        }
+  
+        // Check for accessible labels
+        this.checkAccessibleLabels(actualElement, analysis);
+        
+        // Check for visible labels
+        this.checkVisibleLabels(actualElement, analysis);
+        
+        // Additional checks for custom components
+        if (analysis.isCustomComponent) {
+          this.checkCustomComponentLabels(displayElement, actualElement, analysis);
+        }
+        
+        // Determine overall status
+        this.determineStatus(analysis);
+        
+        return analysis;
+      },
+  
+      isHidden: function(element) {
+        const style = window.getComputedStyle(element);
+        const hiddenInfo = {
+            isHidden: false,
+            reasons: []
+        };
+
+        if (element.hasAttribute('hidden')) {
+            hiddenInfo.isHidden = true;
+            hiddenInfo.reasons.push('hidden attribute is present');
+        }
+        
+        if (element.getAttribute('aria-hidden') === 'true') {
+            hiddenInfo.isHidden = true;
+            hiddenInfo.reasons.push('aria-hidden="true"');
+        }
+        
+        if (style.display === 'none') {
+            hiddenInfo.isHidden = true;
+            hiddenInfo.reasons.push('display: none');
+        }
+        
+        if (style.visibility === 'hidden') {
+            hiddenInfo.isHidden = true;
+            hiddenInfo.reasons.push('visibility: hidden');
+        }
+        
+        const tabindex = parseInt(element.getAttribute('tabindex'));
+        if (!isNaN(tabindex) && tabindex < 0) {
+            hiddenInfo.isHidden = true;
+            hiddenInfo.reasons.push(`tabindex="${tabindex}" (element will be skipped during keyboard navigation)`);
+        }
+
+        // Additional check for hidden select elements in custom components
+        if (element.tagName.toLowerCase() === 'select' && 
+            element.closest('.bootstrap-select') && 
+            element.classList.contains('selectpicker')) {
+            hiddenInfo.isHidden = true;
+            hiddenInfo.reasons.push('select element is hidden by Bootstrap Select component');
+        }
+
+        return hiddenInfo;
+      },
+  
+      getCustomComponentType: function(element) {
+        const className = element.className || '';
+        
+        if (className.includes('bootstrap-select')) {
+          return 'Bootstrap Select';
+        } else if (className.includes('select2-container')) {
+          return 'Select2';
+        } else if (className.includes('chosen-container')) {
+          return 'Chosen';
+        }
+        
+        return 'Custom Component';
+      },
+  
+      checkCustomComponentLabels: function(displayElement, actualElement, analysis) {
+        // Check if the custom component has its own labeling
+        const customButton = displayElement.querySelector('button[role="combobox"], button.dropdown-toggle');
+        
+        if (customButton) {
+          // Check if custom component button has accessible labeling
+          if (customButton.getAttribute('aria-label')) {
+            analysis.labelSources.push('custom component aria-label: "' + customButton.getAttribute('aria-label') + '"');
+          }
+          
+          if (customButton.getAttribute('aria-labelledby')) {
+            const labelledby = customButton.getAttribute('aria-labelledby');
+            const referencedElements = labelledby.split(' ').map(id => document.getElementById(id)).filter(el => el);
+            if (referencedElements.length > 0) {
+              const text = referencedElements.map(el => el.textContent.trim()).join(' ');
+              analysis.labelSources.push('custom component aria-labelledby: "' + text + '"');
+            }
+          }
+          
+          // Check if the title is just placeholder text
+          if (customButton.title && customButton.title !== '- Please Select -' && !customButton.title.includes('Please Select')) {
+            analysis.labelSources.push('custom component title: "' + customButton.title + '"');
+          }
+        }
+        
+        // Note about custom component in analysis
+        if (analysis.customComponentType) {
+          analysis.labelSources.push('📝 Note: This is a ' + analysis.customComponentType + ' component');
+        }
+      },
+  
+      checkAccessibleLabels: function(element, analysis) {
+        const tagName = element.tagName.toLowerCase();
+        const inputType = element.type ? element.type.toLowerCase() : '';
+        const role = element.getAttribute('role');
+        
+        // aria-label
+        if (element.getAttribute('aria-label')) {
+          analysis.hasAccessibleLabel = true;
+          analysis.labelSources.push('aria-label: "' + element.getAttribute('aria-label') + '"');
+        }
+        
+        // aria-labelledby
+        const labelledby = element.getAttribute('aria-labelledby');
+        if (labelledby) {
+          const referencedElements = labelledby.split(' ').map(id => document.getElementById(id)).filter(el => el);
+          if (referencedElements.length > 0) {
+            analysis.hasAccessibleLabel = true;
+            const text = referencedElements.map(el => el.textContent.trim()).join(' ');
+            analysis.labelSources.push('aria-labelledby: "' + text + '"');
+          }
+        }
+        
+        // aria-describedby (supplementary, not a primary label but useful info)
+        const describedby = element.getAttribute('aria-describedby');
+        if (describedby) {
+          const referencedElements = describedby.split(' ').map(id => document.getElementById(id)).filter(el => el);
+          if (referencedElements.length > 0) {
+            const text = referencedElements.map(el => el.textContent.trim()).join(' ');
+            analysis.labelSources.push('aria-describedby: "' + text + '" (supplementary)');
+          }
+        }
+        
+        // label element association (for form controls)
+        if (element.id && this.isFormControl(element)) {
+          const associatedLabel = document.querySelector('label[for="' + element.id + '"]');
+          if (associatedLabel) {
+            analysis.hasAccessibleLabel = true;
+            analysis.hasVisibleLabel = true;
+            analysis.labelSources.push('associated label: "' + associatedLabel.textContent.trim() + '"');
+          }
+        }
+        
+        // wrapping label (for form controls)
+        if (this.isFormControl(element)) {
+          const wrappingLabel = element.closest('label');
+          if (wrappingLabel) {
+            analysis.hasAccessibleLabel = true;
+            analysis.hasVisibleLabel = true;
+            // Get label text excluding the form control's own text/value
+            const clone = wrappingLabel.cloneNode(true);
+            const formControl = clone.querySelector(element.tagName.toLowerCase());
+            if (formControl) formControl.remove();
+            const labelText = clone.textContent.trim();
+            if (labelText) {
+              analysis.labelSources.push('wrapping label: "' + labelText + '"');
+            }
+          }
+        }
+        
+        // title attribute (fallback, but still accessible)
+        if (element.title && !analysis.hasAccessibleLabel) {
+          analysis.hasAccessibleLabel = true;
+          analysis.labelSources.push('title: "' + element.title + '" (fallback)');
+        }
+        
+        // Special handling for different element types
+        if (this.isButton(element)) {
+          // Buttons: text content or value attribute
+          if (element.textContent.trim()) {
+            analysis.hasAccessibleLabel = true;
+            analysis.hasVisibleLabel = true;
+            analysis.labelSources.push('button text: "' + element.textContent.trim() + '"');
+          } else if (element.value && (inputType === 'submit' || inputType === 'button' || inputType === 'reset')) {
+            analysis.hasAccessibleLabel = true;
+            analysis.hasVisibleLabel = true;
+            analysis.labelSources.push('button value: "' + element.value + '"');
+          }
+        } else if (inputType === 'image') {
+          // Image inputs: alt attribute is required
+          if (element.alt) {
+            analysis.hasAccessibleLabel = true;
+            analysis.labelSources.push('alt text: "' + element.alt + '"');
+          }
+        } else if (tagName === 'select') {
+          // Select elements: should have proper labels, not button text
+          // Don't add any automatic labeling - rely on proper label association
+        } else if (this.isFormControl(element)) {
+          // Other form controls: placeholder is NOT a substitute for labels
+          if (element.placeholder && !analysis.hasAccessibleLabel) {
+            analysis.labelSources.push('placeholder: "' + element.placeholder + '" (NOT a proper label)');
+          }
+        }
+      },
+      
+      isFormControl: function(element) {
+        const tagName = element.tagName.toLowerCase();
+        const inputType = element.type ? element.type.toLowerCase() : '';
+        const role = element.getAttribute('role');
+        
+        return (
+          tagName === 'input' && !['submit', 'button', 'reset', 'image'].includes(inputType) ||
+          tagName === 'textarea' ||
+          tagName === 'select' ||
+          element.contentEditable === 'true' ||
+          (role && ['textbox', 'combobox', 'listbox', 'slider', 'spinbutton', 
+                    'searchbox', 'switch', 'checkbox', 'radio'].includes(role))
+        );
+      },
+      
+      isButton: function(element) {
+        const tagName = element.tagName.toLowerCase();
+        const inputType = element.type ? element.type.toLowerCase() : '';
+        const role = element.getAttribute('role');
+        
+        return (
+          tagName === 'button' ||
+          (tagName === 'input' && ['submit', 'button', 'reset'].includes(inputType)) ||
+          role === 'button'
+        );
+      },
+  
+      checkVisibleLabels: function(element, analysis) {
+        // Check for visually associated labels (heuristic approach)
+        const rect = element.getBoundingClientRect();
+        const candidates = [];
+        
+        // Look for text elements near the form field
+        const textElements = document.querySelectorAll('label, span, div, p, h1, h2, h3, h4, h5, h6');
+        textElements.forEach(textEl => {
+          const textRect = textEl.getBoundingClientRect();
+          const distance = Math.abs(textRect.bottom - rect.top) + Math.abs(textRect.right - rect.left);
+          
+          if (distance < 200 && textEl.textContent.trim()) {
+            candidates.push({
+              element: textEl,
+              distance: distance,
+              text: textEl.textContent.trim()
+            });
+          }
+        });
+        
+        // Sort by proximity and check if any could be visible labels
+        candidates.sort((a, b) => a.distance - b.distance);
+        if (candidates.length > 0 && !analysis.hasVisibleLabel) {
+          // This is a heuristic - we can't be 100% sure without visual analysis
+          analysis.labelSources.push('possible visible label: "' + candidates[0].text + '" (heuristic)');
+        }
+      },
+  
+      determineStatus: function(analysis) {
+        const tagName = analysis.tagName;
+        const inputType = analysis.type;
+
+        // First check for missing accessible labels (highest priority - error)
+        if (!analysis.hasAccessibleLabel) {
+            analysis.status = 'error';
+            analysis.issues.push('Missing accessible label');
+            // ...rest of error handling...
+        } else {
+            analysis.status = 'success';
+
+            // Check for hidden status
+            if (this.isHidden(analysis.element).isHidden) {
+                analysis.status = 'warning';
+            }
+
+            // Check for visible label issues
+            if (!analysis.hasVisibleLabel && !this.isButton(analysis.element)) {
+                analysis.status = 'warning';
+                analysis.issues.push('Has accessible label but may lack visible label for sighted users');
+                analysis.recommendations.push('Ensure there is a visible label that sighted users can see and associate with this field');
+            }
+
+            // Required field check - Simplified
+            const element = analysis.element;
+            const isRequired = (
+                element.hasAttribute('required') ||           // Handles both required="" and required="required"
+                element.required === true ||                  // DOM property
+                element.getAttribute('aria-required') === 'true'
+            );
+
+            if (isRequired) {
+                analysis.issues.push('Field is marked as required');
+                analysis.recommendations.push('Please ensure the visible label has a required field indicator (e.g., "*" or "required")');
+            }
+        }
+
+        // Rest of the specific checks remain the same...
+        if (inputType === 'password') {
+          const hasPasswordInLabel = analysis.labelSources.some(source => 
+            source.toLowerCase().includes('password') || source.toLowerCase().includes('pass'));
+          if (!hasPasswordInLabel && analysis.labelSources.length > 0) {
+            analysis.issues.push('Password field may not be clearly identified in label');
+            analysis.recommendations.push('Ensure label clearly indicates this is a password field');
+          }
+        }
+        
+        if (inputType === 'email') {
+          const hasEmailInLabel = analysis.labelSources.some(source => 
+            source.toLowerCase().includes('email') || source.toLowerCase().includes('e-mail'));
+          if (!hasEmailInLabel && analysis.labelSources.length > 0) {
+            analysis.issues.push('Email field may not be clearly identified in label');
+            analysis.recommendations.push('Consider making it clear this field expects an email address');
+          }
+        }
+        
+        if (inputType === 'tel') {
+          const hasPhoneInLabel = analysis.labelSources.some(source => 
+            source.toLowerCase().includes('phone') || source.toLowerCase().includes('tel'));
+          if (!hasPhoneInLabel && analysis.labelSources.length > 0) {
+            analysis.issues.push('Phone field may not be clearly identified in label');
+            analysis.recommendations.push('Consider making it clear this field expects a phone number');
+          }
+        }
+        
+        // Check for placeholder as primary label (anti-pattern)
+        const hasPlaceholderOnly = analysis.labelSources.length === 1 && 
+          analysis.labelSources[0].includes('placeholder:');
+        if (hasPlaceholderOnly) {
+          analysis.status = 'error';
+          analysis.issues.push('Using placeholder as the only label (accessibility anti-pattern)');
+          analysis.recommendations.push('Add a proper label element - placeholders disappear when users type and are not reliably announced by screen readers');
+        }
+      },
+  
+      createNavigationPanel: function() {
+        this.navigationPanel = document.createElement('div');
+        this.navigationPanel.className = 'flc-panel';
+        
+        const header = document.createElement('div');
+        header.className = 'flc-panel-header';
+        header.innerHTML = `
+          <span>Form Label Analysis (${this.results.length} fields)</span>
+          <button class="flc-button danger" onclick="window.formLabelChecker.cleanup()">×</button>
+        `;
+        
+        const content = document.createElement('div');
+        content.className = 'flc-panel-content';
+        
+        // Navigation dropdown
+        const select = document.createElement('select');
+        select.className = 'flc-select';
+        select.innerHTML = '<option value="">Select a field to navigate...</option>';
+        
+        this.results.forEach((result, index) => {
+          const option = document.createElement('option');
+          option.value = index;
+          const label = result.labelSources.length > 0 ? 
+            result.labelSources[0].split(': ')[1] || 'Unlabeled' : 'Unlabeled';
+          option.textContent = `${index + 1}. ${result.tagName} - ${label.substring(0, 30)}...`;
+          select.appendChild(option);
+        });
+        
+        select.addEventListener('change', (e) => {
+          if (e.target.value !== '') {
+            this.navigateToField(parseInt(e.target.value));
+          }
+        });
+        
+        content.appendChild(select);
+        
+        // Results summary
+        const summary = document.createElement('div');
+        const errorCount = this.results.filter(r => r.status === 'error').length;
+        const warningCount = this.results.filter(r => r.status === 'warning').length;
+        const successCount = this.results.filter(r => r.status === 'success').length;
+        
+        summary.innerHTML = `
+          <div style="margin: 10px 0; font-weight: bold;">
+            Summary: ${errorCount} errors, ${warningCount} warnings, ${successCount} passed
+          </div>
+        `;
+        content.appendChild(summary);
+        
+        // Detailed results
+                this.results.forEach((result, index) => {
+          const resultDiv = document.createElement('div');
+          resultDiv.className = `flc-result ${result.status}`;
+          
+          const elementInfo = result.isCustomComponent ? 
+            `${result.customComponentType} (${result.tagName.toUpperCase()})` :
+            `${result.tagName.toUpperCase()}${result.type && result.type !== 'unknown' ? ` (${result.type})` : ''}`;
+          
+          resultDiv.innerHTML = `
+            <strong>#${index + 1} ${elementInfo}</strong><br>
+            ${result.id ? `ID: ${result.id}<br>` : ''}
+            ${result.name ? `Name: ${result.name}<br>` : ''}
+            ${result.labelSources.length > 0 ? 
+              '<strong>Labels found:</strong><br>' + result.labelSources.map(source => '• ' + source).join('<br>') + '<br>' : 
+              '<strong>❌ No accessible labels found</strong><br>'
+            }
+            ${result.issues.length > 0 ? 
+              '<strong>Issues:</strong><br>' + result.issues.map(issue => '⚠️ ' + issue).join('<br>') + '<br>' : ''
+            }
+            ${result.recommendations.length > 0 ? 
+              '<strong>Recommendations:</strong><br>' + result.recommendations.map(rec => '💡 ' + rec).join('<br>') : ''
+            }
+          `;
+          
+          resultDiv.style.cursor = 'pointer';
+          resultDiv.addEventListener('click', () => this.navigateToField(index));
+          
+          content.appendChild(resultDiv);
+        });
+        
+        this.navigationPanel.appendChild(header);
+        this.navigationPanel.appendChild(content);
+        document.body.appendChild(this.navigationPanel);
+        
+        this.makeDraggable(this.navigationPanel, header);
+      },
+  
+      navigateToField: function(index) {
+        const result = this.results[index];
+        if (result && result.displayElement) {
+          // Remove previous highlights
+          document.querySelectorAll('.flc-selected').forEach(el => {
+            el.classList.remove('flc-selected');
+          });
+          
+          // Highlight current field (use display element for visual feedback)
+          result.displayElement.classList.add('flc-selected');
+          
+          // Scroll to field
+          result.displayElement.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'center',
+            inline: 'center'
+          });
+          
+          // Focus the actual form element (if focusable)
+          try {
+            if (result.element && result.element !== result.displayElement) {
+              // For custom components, try to focus the actual select
+              result.element.focus();
+            } else {
+              result.displayElement.focus();
+            }
+          } catch (e) {
+            // Some elements may not be focusable
+          }
+          
+          // Flash the display element
+          let flashCount = 0;
+          const flashInterval = setInterval(() => {
+            result.displayElement.style.outline = flashCount % 2 === 0 ? '3px solid #ff6b6b' : '3px solid #4ecdc4';
+            flashCount++;
+            if (flashCount >= 6) {
+              clearInterval(flashInterval);
+              result.displayElement.style.outline = '3px solid #4ecdc4';
+            }
+          }, 200);
+        }
+      },
+  
+      makeDraggable: function(panel, header) {
+        let isDragging = false;
+        let startX, startY, initialX, initialY;
+        
+        header.addEventListener('mousedown', (e) => {
+          isDragging = true;
+          startX = e.clientX;
+          startY = e.clientY;
+          initialX = panel.offsetLeft;
+          initialY = panel.offsetTop;
+          
+          document.addEventListener('mousemove', drag);
+          document.addEventListener('mouseup', stopDrag);
+        });
+        
+        function drag(e) {
+          if (!isDragging) return;
+          
+          const deltaX = e.clientX - startX;
+          const deltaY = e.clientY - startY;
+          
+          panel.style.left = (initialX + deltaX) + 'px';
+          panel.style.top = (initialY + deltaY) + 'px';
+          panel.style.right = 'auto';
+          panel.style.bottom = 'auto';
+        }
+        
+        function stopDrag() {
+          isDragging = false;
+          document.removeEventListener('mousemove', drag);
+          document.removeEventListener('mouseup', stopDrag);
+        }
+      },
+  
+      getXPath: function(element) {
+        if (element.id) {
+          return `//*[@id="${element.id}"]`;
+        }
+        
+        const parts = [];
+        while (element && element.nodeType === Node.ELEMENT_NODE) {
+          let tagName = element.nodeName.toLowerCase();
+          let index = 1;
+          let sibling = element.previousElementSibling;
+          
+          while (sibling) {
+            if (sibling.nodeName.toLowerCase() === tagName) {
+              index++;
+            }
+            sibling = sibling.previousElementSibling;
+          }
+          
+          const part = index > 1 ? `${tagName}[${index}]` : tagName;
+          parts.unshift(part);
+          element = element.parentElement;
+        }
+        
+        return '/' + parts.join('/');
+      },
+  
+      cleanup: function() {
+        // Remove all highlights
+        document.querySelectorAll('.flc-highlight, .flc-selected').forEach(el => {
+          el.classList.remove('flc-highlight', 'flc-selected');
+        });
+        
+        // Remove overlay
+        if (this.overlay) {
+          this.overlay.remove();
+          this.overlay = null;
+        }
+        
+        // Remove panel
+        if (this.navigationPanel) {
+          this.navigationPanel.remove();
+          this.navigationPanel = null;
+        }
+        
+        // Remove styles
+        const style = document.getElementById('form-label-checker-styles');
+        if (style) {
+          style.remove();
+        }
+        
+        // Remove event listeners
+        document.removeEventListener('click', this.handleClick.bind(this), true);
+        
+        // Reset state
+        this.selectedElements = [];
+        this.results = [];
+        this.isSelecting = false;
+        
+        delete window.formLabelChecker;
+      }
+    };
+  
+    // Initialize the checker
+    window.formLabelChecker.init();
+  })();
