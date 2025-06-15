@@ -1,0 +1,582 @@
+javascript:(function() {
+    // Prevent multiple instances
+    if (window.FormA11yTester) {
+        window.FormA11yTester.destroy();
+    }
+
+    window.FormA11yTester = {
+        selectedElements: [],
+        isSelectionMode: false,
+        panel: null,
+        overlay: null,
+        
+        init: function() {
+            this.createStyles();
+            this.createPanel();
+            this.startSelectionMode();
+        },
+        
+        createStyles: function() {
+            if (document.getElementById('form-a11y-styles')) return;
+            
+            const style = document.createElement('style');
+            style.id = 'form-a11y-styles';
+            style.textContent = `
+                .form-a11y-highlight {
+                    outline: 3px solid #ff6b6b !important;
+                    outline-offset: 2px !important;
+                    background-color: rgba(255, 107, 107, 0.1) !important;
+                }
+                .form-a11y-selected {
+                    outline: 3px solid #4ecdc4 !important;
+                    outline-offset: 2px !important;
+                    background-color: rgba(78, 205, 196, 0.1) !important;
+                }
+                .form-a11y-panel {
+                    position: fixed !important;
+                    bottom: 20px !important;
+                    right: 20px !important;
+                    width: 350px !important;
+                    max-height: 500px !important;
+                    background: white !important;
+                    border: 2px solid #333 !important;
+                    border-radius: 8px !important;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
+                    z-index: 999999 !important;
+                    font-family: Arial, sans-serif !important;
+                    font-size: 14px !important;
+                    overflow: hidden !important;
+                }
+                .form-a11y-header {
+                    background: #333 !important;
+                    color: white !important;
+                    padding: 10px !important;
+                    cursor: move !important;
+                    user-select: none !important;
+                    display: flex !important;
+                    justify-content: space-between !important;
+                    align-items: center !important;
+                }
+                .form-a11y-content {
+                    padding: 15px !important;
+                    max-height: 400px !important;
+                    overflow-y: auto !important;
+                }
+                .form-a11y-button {
+                    background: #007cba !important;
+                    color: white !important;
+                    border: none !important;
+                    padding: 8px 12px !important;
+                    margin: 5px !important;
+                    border-radius: 4px !important;
+                    cursor: pointer !important;
+                    font-size: 12px !important;
+                }
+                .form-a11y-button:hover {
+                    background: #005a8b !important;
+                }
+                .form-a11y-button.active {
+                    background: #ff6b6b !important;
+                }
+                .form-a11y-select {
+                    width: 100% !important;
+                    padding: 8px !important;
+                    margin: 10px 0 !important;
+                    border: 1px solid #ccc !important;
+                    border-radius: 4px !important;
+                }
+                .form-a11y-results {
+                    margin-top: 15px !important;
+                    padding: 10px !important;
+                    background: #f5f5f5 !important;
+                    border-radius: 4px !important;
+                    max-height: 200px !important;
+                    overflow-y: auto !important;
+                }
+                .form-a11y-result-item {
+                    margin: 8px 0 !important;
+                    padding: 8px !important;
+                    border-left: 4px solid #ccc !important;
+                    background: white !important;
+                    border-radius: 3px !important;
+                }
+                .form-a11y-result-item.pass {
+                    border-left-color: #28a745 !important;
+                }
+                .form-a11y-result-item.fail {
+                    border-left-color: #dc3545 !important;
+                }
+                .form-a11y-result-item.warning {
+                    border-left-color: #ffc107 !important;
+                }
+                .form-a11y-close {
+                    background: #dc3545 !important;
+                    color: white !important;
+                    border: none !important;
+                    padding: 5px 10px !important;
+                    border-radius: 3px !important;
+                    cursor: pointer !important;
+                }
+                .form-a11y-instructions {
+                    background: #e3f2fd !important;
+                    padding: 10px !important;
+                    border-radius: 4px !important;
+                    margin-bottom: 15px !important;
+                    font-size: 12px !important;
+                }
+            `;
+            document.head.appendChild(style);
+        },
+        
+        createPanel: function() {
+            if (this.panel) return;
+            
+            this.panel = document.createElement('div');
+            this.panel.className = 'form-a11y-panel';
+            this.panel.innerHTML = `
+                <div class="form-a11y-header">
+                    <span>Form A11y Tester</span>
+                    <button class="form-a11y-close" onclick="window.FormA11yTester.destroy()">×</button>
+                </div>
+                <div class="form-a11y-content">
+                    <div class="form-a11y-instructions">
+                        Click on form fields to select them for testing. Selected elements will be highlighted in teal.
+                    </div>
+                    <button class="form-a11y-button active" onclick="window.FormA11yTester.toggleSelectionMode()">
+                        Selection Mode: ON
+                    </button>
+                    <button class="form-a11y-button" onclick="window.FormA11yTester.analyzeSelected()">
+                        Analyze Selected (0)
+                    </button>
+                    <button class="form-a11y-button" onclick="window.FormA11yTester.clearSelection()">
+                        Clear Selection
+                    </button>
+                    <select class="form-a11y-select" onchange="window.FormA11yTester.navigateToElement(this.value)">
+                        <option value="">Navigate to element...</option>
+                    </select>
+                    <div class="form-a11y-results"></div>
+                </div>
+            `;
+            
+            document.body.appendChild(this.panel);
+            this.makeDraggable();
+        },
+        
+        makeDraggable: function() {
+            const header = this.panel.querySelector('.form-a11y-header');
+            let isDragging = false;
+            let dragOffset = { x: 0, y: 0 };
+            
+            header.addEventListener('mousedown', (e) => {
+                if (e.target.classList.contains('form-a11y-close')) return;
+                isDragging = true;
+                const rect = this.panel.getBoundingClientRect();
+                dragOffset.x = e.clientX - rect.left;
+                dragOffset.y = e.clientY - rect.top;
+                document.addEventListener('mousemove', this.drag);
+                document.addEventListener('mouseup', this.stopDrag);
+            });
+            
+            this.drag = function(e) {
+                if (!isDragging) return;
+                const x = e.clientX - dragOffset.x;
+                const y = e.clientY - dragOffset.y;
+                this.panel.style.left = Math.max(0, Math.min(x, window.innerWidth - this.panel.offsetWidth)) + 'px';
+                this.panel.style.top = Math.max(0, Math.min(y, window.innerHeight - this.panel.offsetHeight)) + 'px';
+                this.panel.style.right = 'auto';
+                this.panel.style.bottom = 'auto';
+            }.bind(this);
+            
+            this.stopDrag = function() {
+                isDragging = false;
+                document.removeEventListener('mousemove', this.drag);
+                document.removeEventListener('mouseup', this.stopDrag);
+            }.bind(this);
+        },
+        
+        startSelectionMode: function() {
+            this.isSelectionMode = true;
+            document.addEventListener('mouseover', this.handleMouseOver);
+            document.addEventListener('mouseout', this.handleMouseOut);
+            document.addEventListener('click', this.handleClick);
+        },
+        
+        handleMouseOver: function(e) {
+            if (!window.FormA11yTester.isSelectionMode) return;
+            if (window.FormA11yTester.isFormField(e.target) && !e.target.classList.contains('form-a11y-selected')) {
+                e.target.classList.add('form-a11y-highlight');
+            }
+        },
+        
+        handleMouseOut: function(e) {
+            if (!window.FormA11yTester.isSelectionMode) return;
+            e.target.classList.remove('form-a11y-highlight');
+        },
+        
+        handleClick: function(e) {
+            if (!window.FormA11yTester.isSelectionMode) return;
+            if (e.target.closest('.form-a11y-panel')) return;
+            
+            if (window.FormA11yTester.isFormField(e.target)) {
+                e.preventDefault();
+                e.stopPropagation();
+                window.FormA11yTester.toggleSelection(e.target);
+            }
+        },
+        
+        isFormField: function(element) {
+            const formTags = ['input', 'select', 'textarea'];
+            const inputTypes = ['text', 'email', 'password', 'tel', 'url', 'search', 'number', 'date', 'datetime-local', 'month', 'week', 'time', 'color', 'range', 'file'];
+            
+            if (formTags.includes(element.tagName.toLowerCase())) {
+                if (element.tagName.toLowerCase() === 'input') {
+                    return inputTypes.includes(element.type) || element.type === 'radio' || element.type === 'checkbox';
+                }
+                return true;
+            }
+            
+            // Check for custom elements with role
+            if (element.getAttribute('role') === 'textbox' || element.getAttribute('role') === 'combobox') {
+                return true;
+            }
+            
+            // Check for contenteditable
+            if (element.contentEditable === 'true') {
+                return true;
+            }
+            
+            return false;
+        },
+        
+        toggleSelection: function(element) {
+            const index = this.selectedElements.indexOf(element);
+            if (index > -1) {
+                this.selectedElements.splice(index, 1);
+                element.classList.remove('form-a11y-selected');
+            } else {
+                this.selectedElements.push(element);
+                element.classList.add('form-a11y-selected');
+            }
+            
+            this.updateUI();
+        },
+        
+        updateUI: function() {
+            const button = this.panel.querySelector('button[onclick*="analyzeSelected"]');
+            button.textContent = `Analyze Selected (${this.selectedElements.length})`;
+            
+            const select = this.panel.querySelector('.form-a11y-select');
+            select.innerHTML = '<option value="">Navigate to element...</option>';
+            
+            this.selectedElements.forEach((el, index) => {
+                const xpath = this.getXPath(el);
+                const label = this.getElementLabel(el) || `Element ${index + 1}`;
+                const option = document.createElement('option');
+                option.value = index;
+                option.textContent = `${label} (${el.tagName.toLowerCase()})`;
+                select.appendChild(option);
+            });
+        },
+        
+        getXPath: function(element) {
+            if (element.id) {
+                return `//*[@id="${element.id}"]`;
+            }
+            
+            const parts = [];
+            while (element && element.nodeType === Node.ELEMENT_NODE) {
+                let nbOfPreviousSiblings = 0;
+                let hasNextSiblings = false;
+                let sibling = element.previousSibling;
+                while (sibling) {
+                    if (sibling.nodeType === Node.ELEMENT_NODE && sibling.nodeName === element.nodeName) {
+                        nbOfPreviousSiblings++;
+                    }
+                    sibling = sibling.previousSibling;
+                }
+                sibling = element.nextSibling;
+                while (sibling) {
+                    if (sibling.nodeType === Node.ELEMENT_NODE && sibling.nodeName === element.nodeName) {
+                        hasNextSiblings = true;
+                        break;
+                    }
+                    sibling = sibling.nextSibling;
+                }
+                const prefix = element.nodeName.toLowerCase();
+                const nth = nbOfPreviousSiblings || hasNextSiblings ? `[${nbOfPreviousSiblings + 1}]` : '';
+                parts.push(prefix + nth);
+                element = element.parentNode;
+            }
+            return parts.length ? '/' + parts.reverse().join('/') : '';
+        },
+        
+        navigateToElement: function(index) {
+            if (index === '') return;
+            const element = this.selectedElements[parseInt(index)];
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                element.focus();
+                
+                // Highlight temporarily
+                element.style.outline = '5px solid #ff6b6b';
+                setTimeout(() => {
+                    element.style.outline = '';
+                }, 2000);
+            }
+        },
+        
+        toggleSelectionMode: function() {
+            this.isSelectionMode = !this.isSelectionMode;
+            const button = this.panel.querySelector('button[onclick*="toggleSelectionMode"]');
+            button.textContent = `Selection Mode: ${this.isSelectionMode ? 'ON' : 'OFF'}`;
+            button.classList.toggle('active', this.isSelectionMode);
+            
+            if (!this.isSelectionMode) {
+                // Remove highlights
+                document.querySelectorAll('.form-a11y-highlight').forEach(el => {
+                    el.classList.remove('form-a11y-highlight');
+                });
+            }
+        },
+        
+        clearSelection: function() {
+            this.selectedElements.forEach(el => {
+                el.classList.remove('form-a11y-selected');
+            });
+            this.selectedElements = [];
+            this.updateUI();
+            this.panel.querySelector('.form-a11y-results').innerHTML = '';
+        },
+        
+        analyzeSelected: function() {
+            if (this.selectedElements.length === 0) {
+                alert('Please select at least one form field to analyze.');
+                return;
+            }
+            
+            const results = [];
+            this.selectedElements.forEach((element, index) => {
+                const result = this.analyzeElement(element, index + 1);
+                results.push(result);
+            });
+            
+            this.displayResults(results);
+        },
+        
+        analyzeElement: function(element, index) {
+            const result = {
+                element: element,
+                index: index,
+                label: this.getElementLabel(element),
+                issues: [],
+                passes: []
+            };
+            
+            // Check for required attribute
+            const hasRequiredAttr = this.hasRequiredAttribute(element);
+            const hasAriaRequired = this.hasAriaRequired(element);
+            const hasRequiredIndicator = this.hasRequiredIndicator(element);
+            
+            // Test 1: Required attribute presence
+            if (hasRequiredAttr || hasAriaRequired) {
+                result.passes.push('Has required attribute');
+            } else {
+                result.issues.push('Missing required attribute (HTML required or aria-required)');
+            }
+            
+            // Test 2: Required indicator in label
+            if (hasRequiredIndicator) {
+                result.passes.push('Has required indicator in label');
+            } else if (hasRequiredAttr || hasAriaRequired) {
+                result.issues.push('Missing required indicator (*) in label');
+            }
+            
+            // Test 3: Label association
+            if (result.label) {
+                result.passes.push('Has associated label');
+            } else {
+                result.issues.push('Missing or improperly associated label');
+            }
+            
+            // Test 4: Accessible name
+            const accessibleName = this.getAccessibleName(element);
+            if (accessibleName) {
+                result.passes.push('Has accessible name');
+            } else {
+                result.issues.push('Missing accessible name');
+            }
+            
+            // Test 5: Keyboard accessibility
+            if (element.tabIndex >= 0 || this.isNativelyFocusable(element)) {
+                result.passes.push('Keyboard accessible');
+            } else {
+                result.issues.push('Not keyboard accessible');
+            }
+            
+            return result;
+        },
+        
+        hasRequiredAttribute: function(element) {
+            return element.hasAttribute('required') || 
+                   element.getAttribute('required') === 'required' ||
+                   element.getAttribute('required') === 'true';
+        },
+        
+        hasAriaRequired: function(element) {
+            return element.getAttribute('aria-required') === 'true';
+        },
+        
+        hasRequiredIndicator: function(element) {
+            const label = this.getAssociatedLabel(element);
+            if (!label) return false;
+            
+            // Check for asterisk in label text or child elements
+            const labelText = label.textContent || '';
+            const hasAsterisk = labelText.includes('*');
+            
+            // Check for asterisk in spans or other child elements
+            const hasAsteriskInChild = label.querySelector('*') && 
+                                     (label.innerHTML.includes('*') || 
+                                      label.querySelector('[class*="required"]') ||
+                                      label.querySelector('[class*="asterisk"]') ||
+                                      label.querySelector('[class*="mandatory"]'));
+            
+            // Check for CSS-generated content (common in modern frameworks)
+            const computedStyle = window.getComputedStyle(label, '::after');
+            const afterContent = computedStyle.getPropertyValue('content');
+            const hasAsteriskInCSS = afterContent && afterContent.includes('*');
+            
+            return hasAsterisk || hasAsteriskInChild || hasAsteriskInCSS;
+        },
+        
+        getElementLabel: function(element) {
+            const label = this.getAssociatedLabel(element);
+            return label ? label.textContent.trim() : null;
+        },
+        
+        getAssociatedLabel: function(element) {
+            // Method 1: label[for] attribute
+            if (element.id) {
+                const label = document.querySelector(`label[for="${element.id}"]`);
+                if (label) return label;
+            }
+            
+            // Method 2: nested in label
+            const parentLabel = element.closest('label');
+            if (parentLabel) return parentLabel;
+            
+            // Method 3: aria-labelledby
+            const labelledBy = element.getAttribute('aria-labelledby');
+            if (labelledBy) {
+                const label = document.getElementById(labelledBy);
+                if (label) return label;
+            }
+            
+            return null;
+        },
+        
+        getAccessibleName: function(element) {
+            // Check aria-label
+            if (element.getAttribute('aria-label')) {
+                return element.getAttribute('aria-label');
+            }
+            
+            // Check aria-labelledby
+            const labelledBy = element.getAttribute('aria-labelledby');
+            if (labelledBy) {
+                const labelElement = document.getElementById(labelledBy);
+                if (labelElement) return labelElement.textContent.trim();
+            }
+            
+            // Check associated label
+            const label = this.getAssociatedLabel(element);
+            if (label) return label.textContent.trim();
+            
+            // Check placeholder (not ideal but sometimes used)
+            if (element.placeholder) {
+                return element.placeholder;
+            }
+            
+            return null;
+        },
+        
+        isNativelyFocusable: function(element) {
+            const focusableElements = ['input', 'select', 'textarea', 'button'];
+            return focusableElements.includes(element.tagName.toLowerCase()) && 
+                   !element.disabled;
+        },
+        
+        displayResults: function(results) {
+            const resultsContainer = this.panel.querySelector('.form-a11y-results');
+            resultsContainer.innerHTML = '<h4 style="margin-top: 0;">Analysis Results</h4>';
+            
+            results.forEach(result => {
+                const div = document.createElement('div');
+                div.className = 'form-a11y-result-item';
+                
+                const hasIssues = result.issues.length > 0;
+                const hasPasses = result.passes.length > 0;
+                
+                if (hasIssues && hasPasses) {
+                    div.className += ' warning';
+                } else if (hasIssues) {
+                    div.className += ' fail';
+                } else {
+                    div.className += ' pass';
+                }
+                
+                let html = `<strong>Element ${result.index}:</strong> ${result.label || 'Unlabeled'}<br>`;
+                
+                if (result.passes.length > 0) {
+                    html += '<strong style="color: #28a745;">✓ Passes:</strong><br>';
+                    result.passes.forEach(pass => {
+                        html += `• ${pass}<br>`;
+                    });
+                }
+                
+                if (result.issues.length > 0) {
+                    html += '<strong style="color: #dc3545;">✗ Issues:</strong><br>';
+                    result.issues.forEach(issue => {
+                        html += `• ${issue}<br>`;
+                    });
+                }
+                
+                div.innerHTML = html;
+                resultsContainer.appendChild(div);
+            });
+        },
+        
+        destroy: function() {
+            // Remove event listeners
+            document.removeEventListener('mouseover', this.handleMouseOver);
+            document.removeEventListener('mouseout', this.handleMouseOut);
+            document.removeEventListener('click', this.handleClick);
+            
+            // Remove highlights
+            document.querySelectorAll('.form-a11y-highlight, .form-a11y-selected').forEach(el => {
+                el.classList.remove('form-a11y-highlight', 'form-a11y-selected');
+            });
+            
+            // Remove panel and styles
+            if (this.panel) {
+                this.panel.remove();
+                this.panel = null;
+            }
+            
+            const styles = document.getElementById('form-a11y-styles');
+            if (styles) {
+                styles.remove();
+            }
+            
+            // Clear data
+            this.selectedElements = [];
+            this.isSelectionMode = false;
+            
+            // Remove from window
+            delete window.FormA11yTester;
+        }
+    };
+    
+    // Initialize the tester
+    window.FormA11yTester.init();
+})();
