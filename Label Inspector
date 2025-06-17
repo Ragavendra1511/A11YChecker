@@ -123,7 +123,7 @@ javascript:(function(){
       return element.value || (element.type === 'submit' ? 'Submit' : 'Reset');
     }
     
-    // Get visible text content
+    // Get visible text content (works for custom buttons too)
     let textContent = '';
     if (element.textContent || element.innerText) {
       textContent = (element.textContent || element.innerText).trim();
@@ -135,9 +135,20 @@ javascript:(function(){
       textContent = textContent ? textContent + ' ' + img.alt : img.alt;
     }
     
+    // For custom buttons, also check common data attributes
+    const dataLabel = element.getAttribute('data-label') || element.getAttribute('data-title');
+    if (dataLabel) {
+      textContent = textContent ? textContent + ' ' + dataLabel : dataLabel;
+    }
+    
     // Check title attribute as fallback
     if (!textContent && element.title) {
       textContent = element.title.trim();
+    }
+    
+    // For custom elements, check if they have a name property
+    if (!textContent && element.name) {
+      textContent = element.name.trim();
     }
     
     return textContent;
@@ -164,9 +175,24 @@ javascript:(function(){
   function categorizeElement(element) {
     const accessibleName = getAccessibleName(element);
     const visibleLabel = getVisibleLabel(element);
+    const role = element.getAttribute('role');
+    const tagName = element.tagName.toLowerCase();
     
     if (!accessibleName) {
       return { category: 'error', reason: 'Missing accessible name' };
+    }
+    
+    // Check if custom button has proper role
+    if (!['button', 'a', 'input'].includes(tagName) && 
+        !['button', 'link', 'menuitem', 'tab', 'option'].includes(role)) {
+      return { category: 'warning', reason: 'Custom interactive element missing proper role' };
+    }
+    
+    // Check if custom button is keyboard accessible
+    if (!['button', 'a', 'input'].includes(tagName) && 
+        !element.hasAttribute('tabindex') && 
+        element.getAttribute('tabindex') !== '0') {
+      return { category: 'warning', reason: 'Custom button may not be keyboard accessible' };
     }
     
     // Check for problematic labels
@@ -210,6 +236,14 @@ javascript:(function(){
     if (accessibleDescription) {
       content += `\n📝 Description: "${accessibleDescription}"`;
     }
+    
+    // Add element type info for custom buttons
+    const tagName = element.tagName.toLowerCase();
+    const role = element.getAttribute('role');
+    if (!['button', 'a', 'input'].includes(tagName)) {
+      content += `\n🏷️ Type: <${tagName}>${role ? ` role="${role}"` : ' (no role)'}`;
+    }
+    
     content += `\n${info.category === 'good' ? '✅' : info.category === 'warning' ? '⚠️' : '❌'} ${info.reason}`;
     
     tooltip.textContent = content;
@@ -280,10 +314,57 @@ javascript:(function(){
     stats = { good: 0, warning: 0, error: 0 };
     hideTooltip();
     
-    // Find all interactive elements
-    const elements = document.querySelectorAll('button, a[href], input[type="button"], input[type="submit"], input[type="reset"], [role="button"], [role="link"]');
+    // Find all interactive elements including custom buttons
+    const selectors = [
+      'button',
+      'a[href]',
+      'input[type="button"]',
+      'input[type="submit"]',
+      'input[type="reset"]',
+      '[role="button"]',
+      '[role="link"]',
+      '[role="menuitem"]',
+      '[role="tab"]',
+      '[role="option"]',
+      '[tabindex]:not([tabindex="-1"])', // Focusable elements
+      '[onclick]', // Elements with click handlers
+      '[onkeypress]',
+      '[onkeydown]'
+    ];
     
-    elements.forEach(element => {
+    const elements = document.querySelectorAll(selectors.join(', '));
+    const filteredElements = Array.from(elements).filter(element => {
+      // Skip non-interactive elements
+      if (element.closest('.label-inspector-panel')) return false;
+      
+      // Skip elements that are clearly not meant to be interactive
+      const tagName = element.tagName.toLowerCase();
+      const role = element.getAttribute('role');
+      
+      // Always include semantic buttons and links
+      if (['button', 'a', 'input'].includes(tagName)) return true;
+      if (['button', 'link', 'menuitem', 'tab', 'option'].includes(role)) return true;
+      
+      // Include if it has tabindex and seems interactive
+      if (element.hasAttribute('tabindex') && element.getAttribute('tabindex') !== '-1') {
+        return true;
+      }
+      
+      // Include if it has click handlers and looks like it might be a button
+      if (element.hasAttribute('onclick') || element.hasAttribute('onkeypress') || element.hasAttribute('onkeydown')) {
+        // Additional heuristics to avoid false positives
+        const computedStyle = window.getComputedStyle(element);
+        const hasPointerCursor = computedStyle.cursor === 'pointer';
+        const hasButtonStyling = computedStyle.border !== 'none' || computedStyle.backgroundColor !== 'rgba(0, 0, 0, 0)';
+        const hasButtonText = element.textContent && element.textContent.trim().length > 0;
+        
+        return hasPointerCursor || hasButtonStyling || hasButtonText;
+      }
+      
+      return false;
+    });
+    
+    filteredElements.forEach(element => {
       if (element.closest('.label-inspector-panel')) return; // Skip our own panel
       
       const info = categorizeElement(element);
