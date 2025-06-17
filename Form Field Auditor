@@ -1,0 +1,388 @@
+javascript:(function(){
+    // CSS styles for the auditor
+    var css = `
+        #form-auditor-overlay {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 320px;
+            background: #fff;
+            border: 3px solid #007acc;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            z-index: 999999;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        #form-auditor-header {
+            background: #007acc;
+            color: #fff;
+            padding: 12px;
+            cursor: move;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+        #form-auditor-content {
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        #form-auditor-close {
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+        }
+        .form-field-highlight {
+            outline: 3px solid #ff6b6b !important;
+            outline-offset: 2px !important;
+            position: relative !important;
+        }
+        .form-field-valid {
+            outline: 3px solid #51cf66 !important;
+            outline-offset: 2px !important;
+            position: relative !important;
+        }
+        .form-field-warning {
+            outline: 3px solid #ffd93d !important;
+            outline-offset: 2px !important;
+            position: relative !important;
+        }
+        .form-field-info {
+            outline: 3px solid #3498db !important;
+            outline-offset: 2px !important;
+            position: relative !important;
+        }
+        .fieldset-highlight {
+            border: 2px dashed #007acc !important;
+            background: rgba(0,122,204,0.05) !important;
+        }
+        .legend-highlight {
+            background: #007acc !important;
+            color: #fff !important;
+            padding: 4px 8px !important;
+            border-radius: 4px !important;
+        }
+        .description-line {
+            position: absolute;
+            border-top: 2px dotted #666;
+            z-index: 999998;
+            pointer-events: none;
+        }
+        .audit-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: #007acc;
+            color: #fff;
+            font-size: 10px;
+            padding: 2px 5px;
+            border-radius: 10px;
+            font-weight: bold;
+            z-index: 1000000;
+            pointer-events: none;
+        }
+    `;
+
+    // Add styles to page
+    var style = document.createElement('style');
+    style.textContent = css;
+    document.head.appendChild(style);
+
+    // Remove existing overlay if present
+    if (document.getElementById('form-auditor-overlay')) {
+        document.getElementById('form-auditor-overlay').remove();
+        return;
+    }
+
+    // Create overlay
+    var overlay = document.createElement('div');
+    overlay.id = 'form-auditor-overlay';
+    overlay.innerHTML = `
+        <div id="form-auditor-header">
+            🔍 Form Field Auditor
+            <button id="form-auditor-close">×</button>
+        </div>
+        <div id="form-auditor-content">
+            <div id="audit-info">Hover over form fields to see accessibility information</div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    // Make overlay draggable
+    var isDragging = false, startX, startY, startLeft, startTop;
+    var header = document.getElementById('form-auditor-header');
+    
+    header.addEventListener('mousedown', function(e) {
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        var rect = overlay.getBoundingClientRect();
+        startLeft = rect.left;
+        startTop = rect.top;
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', stopDrag);
+    });
+
+    function drag(e) {
+        if (!isDragging) return;
+        var newLeft = startLeft + e.clientX - startX;
+        var newTop = startTop + e.clientY - startY;
+        overlay.style.left = Math.max(0, Math.min(window.innerWidth - overlay.offsetWidth, newLeft)) + 'px';
+        overlay.style.top = Math.max(0, Math.min(window.innerHeight - overlay.offsetHeight, newTop)) + 'px';
+        overlay.style.right = 'auto';
+    }
+
+    function stopDrag() {
+        isDragging = false;
+        document.removeEventListener('mousemove', drag);
+        document.removeEventListener('mouseup', stopDrag);
+    }
+
+    // Close button functionality
+    document.getElementById('form-auditor-close').addEventListener('click', function() {
+        cleanup();
+        overlay.remove();
+    });
+
+    // Get all form elements
+    var formElements = document.querySelectorAll('input, textarea, select, button, fieldset, legend');
+    var auditInfo = document.getElementById('audit-info');
+
+    // Function to get accessible name for form elements
+    function getAccessibleName(element) {
+        var name = '';
+        var tagName = element.tagName.toLowerCase();
+        var inputType = element.type ? element.type.toLowerCase() : '';
+
+        // Check aria-label first
+        if (element.getAttribute('aria-label')) {
+            name = 'aria-label: "' + element.getAttribute('aria-label') + '"';
+            return { method: 'aria-label', name: name, status: 'valid' };
+        }
+
+        // Check aria-labelledby
+        if (element.getAttribute('aria-labelledby')) {
+            var ids = element.getAttribute('aria-labelledby').split(' ');
+            var labelText = ids.map(function(id) {
+                var el = document.getElementById(id);
+                return el ? el.textContent.trim() : '';
+            }).join(' ');
+            name = 'aria-labelledby: "' + labelText + '"';
+            return { method: 'aria-labelledby', name: name, status: 'valid' };
+        }
+
+        // Check for explicit label (label[for])
+        if (element.id) {
+            var label = document.querySelector('label[for="' + element.id + '"]');
+            if (label) {
+                name = 'Explicit label: "' + label.textContent.trim() + '"';
+                return { method: 'explicit-label', name: name, status: 'valid' };
+            }
+        }
+
+        // Check for implicit label (wrapped in label)
+        var parentLabel = element.closest('label');
+        if (parentLabel) {
+            name = 'Implicit label: "' + parentLabel.textContent.trim() + '"';
+            return { method: 'implicit-label', name: name, status: 'valid' };
+        }
+
+        // For input type="button" or button elements, check value attribute
+        if ((tagName === 'input' && inputType === 'button') || 
+            (tagName === 'input' && inputType === 'submit') || 
+            (tagName === 'input' && inputType === 'reset') ||
+            tagName === 'button') {
+            
+            if (element.value && element.value.trim()) {
+                name = 'Value attribute: "' + element.value.trim() + '"';
+                return { method: 'value', name: name, status: 'valid' };
+            }
+            
+            // Button elements can also have text content
+            if (tagName === 'button' && element.textContent.trim()) {
+                name = 'Button text: "' + element.textContent.trim() + '"';
+                return { method: 'button-text', name: name, status: 'valid' };
+            }
+        }
+
+        // Check alt attribute for input type="image"
+        if (tagName === 'input' && inputType === 'image' && element.getAttribute('alt')) {
+            name = 'Alt attribute: "' + element.getAttribute('alt') + '"';
+            return { method: 'alt', name: name, status: 'valid' };
+        }
+
+        // Check title attribute (warning level)
+        if (element.getAttribute('title')) {
+            name = 'Title: "' + element.getAttribute('title') + '"';
+            return { method: 'title', name: name, status: 'warning' };
+        }
+
+        // Check placeholder (warning level - not sufficient alone)
+        if (element.placeholder) {
+            name = 'Placeholder only: "' + element.placeholder + '"';
+            return { method: 'placeholder', name: name, status: 'warning' };
+        }
+
+        // For fieldset, check if it has a legend
+        if (tagName === 'fieldset') {
+            var legend = element.querySelector('legend');
+            if (legend) {
+                name = 'Legend: "' + legend.textContent.trim() + '"';
+                return { method: 'legend', name: name, status: 'valid' };
+            } else {
+                return { method: 'none', name: '❌ NO LEGEND FOR FIELDSET', status: 'error' };
+            }
+        }
+
+        // For legend elements
+        if (tagName === 'legend') {
+            name = 'Legend text: "' + element.textContent.trim() + '"';
+            return { method: 'legend-text', name: name, status: 'valid' };
+        }
+
+        return { method: 'none', name: '❌ NO ACCESSIBLE NAME', status: 'error' };
+    }
+
+    // Function to get detailed field information
+    function getFieldInfo(element) {
+        var info = getAccessibleName(element);
+        var details = [];
+        var tagName = element.tagName.toLowerCase();
+        var inputType = element.type ? element.type.toLowerCase() : '';
+
+        details.push('<strong>Element:</strong> ' + tagName + (inputType ? '[type="' + inputType + '"]' : ''));
+        details.push('<strong>Label Method:</strong> ' + info.method);
+        details.push('<strong>Accessible Name:</strong> ' + info.name);
+
+        // Check required status
+        if (element.hasAttribute('required') || element.getAttribute('aria-required') === 'true') {
+            details.push('🔴 <strong>Required field</strong>');
+        }
+
+        // Check invalid status
+        if (element.getAttribute('aria-invalid') === 'true') {
+            details.push('⚠️ <strong>Invalid field</strong>');
+        }
+
+        // Check for descriptions
+        if (element.getAttribute('aria-describedby')) {
+            var descIds = element.getAttribute('aria-describedby').split(' ');
+            var descriptions = descIds.map(function(id) {
+                var el = document.getElementById(id);
+                return el ? el.textContent.trim() : '';
+            }).join('; ');
+            details.push('<strong>Description:</strong> ' + descriptions);
+        }
+
+        // Check for error messages
+        if (element.getAttribute('aria-errormessage')) {
+            var errorId = element.getAttribute('aria-errormessage');
+            var errorEl = document.getElementById(errorId);
+            if (errorEl) {
+                details.push('<strong>Error Message:</strong> ' + errorEl.textContent.trim());
+            }
+        }
+
+        return { info: info, details: details };
+    }
+
+    // Function to highlight element and show info
+    function highlightElement(element) {
+        cleanup();
+        
+        var fieldInfo = getFieldInfo(element);
+        var statusClass = 'form-field-highlight';
+        
+        if (fieldInfo.info.status === 'valid') statusClass = 'form-field-valid';
+        else if (fieldInfo.info.status === 'warning') statusClass = 'form-field-warning';
+        else if (fieldInfo.info.status === 'error') statusClass = 'form-field-highlight';
+        
+        element.classList.add(statusClass);
+        
+        // Add badge showing label method
+        var badge = document.createElement('div');
+        badge.className = 'audit-badge';
+        badge.textContent = fieldInfo.info.method;
+        element.style.position = 'relative';
+        element.appendChild(badge);
+        
+        // Update info panel
+        auditInfo.innerHTML = '<div style="margin-bottom:10px;"><strong>' + element.tagName + '</strong></div>' + 
+                             fieldInfo.details.join('<br>');
+        
+        // Draw description lines if present
+        if (element.getAttribute('aria-describedby')) {
+            drawDescriptionLines(element, element.getAttribute('aria-describedby'));
+        }
+    }
+
+    // Function to draw dotted lines to descriptions
+    function drawDescriptionLines(element, descIds) {
+        var elementRect = element.getBoundingClientRect();
+        descIds.split(' ').forEach(function(id) {
+            var descEl = document.getElementById(id);
+            if (descEl) {
+                var descRect = descEl.getBoundingClientRect();
+                var line = document.createElement('div');
+                line.className = 'description-line';
+                line.style.left = Math.min(elementRect.right, descRect.left) + 'px';
+                line.style.top = ((elementRect.top + elementRect.bottom) / 2) + 'px';
+                line.style.width = Math.abs(descRect.left - elementRect.right) + 'px';
+                document.body.appendChild(line);
+            }
+        });
+    }
+
+    // Function to clean up highlights
+    function cleanup() {
+        document.querySelectorAll('.form-field-highlight, .form-field-valid, .form-field-warning, .form-field-info, .fieldset-highlight, .legend-highlight').forEach(function(el) {
+            el.classList.remove('form-field-highlight', 'form-field-valid', 'form-field-warning', 'form-field-info', 'fieldset-highlight', 'legend-highlight');
+        });
+        document.querySelectorAll('.audit-badge').forEach(function(badge) {
+            badge.remove();
+        });
+        document.querySelectorAll('.description-line').forEach(function(line) {
+            line.remove();
+        });
+    }
+
+    // Add event listeners to form elements
+    formElements.forEach(function(element) {
+        element.addEventListener('mouseenter', function() {
+            highlightElement(element);
+        });
+        element.addEventListener('focus', function() {
+            highlightElement(element);
+        });
+        element.addEventListener('mouseleave', cleanup);
+        element.addEventListener('blur', cleanup);
+    });
+
+    // Special handling for fieldsets
+    document.querySelectorAll('fieldset').forEach(function(fieldset) {
+        fieldset.addEventListener('mouseenter', function() {
+            this.classList.add('fieldset-highlight');
+            var legend = this.querySelector('legend');
+            if (legend) {
+                legend.classList.add('legend-highlight');
+            }
+        });
+        fieldset.addEventListener('mouseleave', function() {
+            this.classList.remove('fieldset-highlight');
+            var legend = this.querySelector('legend');
+            if (legend) {
+                legend.classList.remove('legend-highlight');
+            }
+        });
+    });
+
+})();
