@@ -1,3 +1,4 @@
+
 javascript:(function(){
   if (window.labelInspectorActive) {
     // If already active, remove it
@@ -58,7 +59,7 @@ javascript:(function(){
     }
     
     .label-inspector-panel {
-      position: fixed !important;
+      position: absolute !important;
       top: 10px !important;
       right: 10px !important;
       background: white !important;
@@ -69,8 +70,14 @@ javascript:(function(){
       font-size: 12px !important;
       border-radius: 6px !important;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+      width: 220px !important;
       min-width: 220px !important;
+      max-width: 220px !important;
       cursor: move !important;
+      user-select: none !important;
+    }
+    .label-inspector-panel.dragging {
+      cursor: grabbing !important;
     }
     .label-inspector-panel button {
       margin: 2px !important;
@@ -435,6 +442,11 @@ javascript:(function(){
   };
   
   document.getElementById('li-close').onclick = () => {
+    // Clean up event listeners
+    panel.removeEventListener('mousedown', dragMouseDown);
+    document.removeEventListener('mousemove', dragMouseMove);
+    document.removeEventListener('mouseup', dragMouseUp);
+    
     document.querySelectorAll('.label-inspector-overlay, .label-inspector-tooltip, .label-inspector-panel').forEach(el => el.remove());
     document.querySelectorAll('.label-inspector-element-border').forEach(el => {
       el.classList.remove('label-inspector-element-border');
@@ -453,25 +465,45 @@ javascript:(function(){
   let isDragging = false;
   let dragOffset = { x: 0, y: 0 };
   
-  panel.onmousedown = (e) => {
+  const dragMouseDown = (e) => {
     if (e.target.tagName === 'BUTTON') return;
     isDragging = true;
-    dragOffset.x = e.clientX - panel.offsetLeft;
-    dragOffset.y = e.clientY - panel.offsetTop;
+    const rect = panel.getBoundingClientRect();
+    dragOffset.x = e.clientX - rect.left;
+    dragOffset.y = e.clientY - rect.top;
     e.preventDefault();
+    e.stopPropagation();
+    
+    // Add dragging class to prevent size changes
+    panel.classList.add('dragging');
   };
   
-  document.onmousemove = (e) => {
+  const dragMouseMove = (e) => {
+    if (!isDragging) return;
+    e.preventDefault();
+    
+    const newLeft = e.clientX - dragOffset.x;
+    const newTop = e.clientY - dragOffset.y;
+    
+    // Keep panel within viewport bounds
+    const maxLeft = window.innerWidth - panel.offsetWidth;
+    const maxTop = window.innerHeight - panel.offsetHeight;
+    
+    panel.style.left = Math.max(0, Math.min(newLeft, maxLeft)) + 'px';
+    panel.style.top = Math.max(0, Math.min(newTop, maxTop)) + 'px';
+    panel.style.right = 'auto';
+  };
+  
+  const dragMouseUp = (e) => {
     if (isDragging) {
-      panel.style.left = (e.clientX - dragOffset.x) + 'px';
-      panel.style.top = (e.clientY - dragOffset.y) + 'px';
-      panel.style.right = 'auto';
+      isDragging = false;
+      panel.classList.remove('dragging');
     }
   };
   
-  document.onmouseup = () => {
-    isDragging = false;
-  };
+  panel.addEventListener('mousedown', dragMouseDown);
+  document.addEventListener('mousemove', dragMouseMove);
+  document.addEventListener('mouseup', dragMouseUp);
   
   updateDisplay();
 })();
