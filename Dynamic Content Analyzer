@@ -1,0 +1,120 @@
+javascript:(function(){
+  if(window.contentMonitor){
+    window.contentMonitor.disconnect();
+    delete window.contentMonitor;
+    document.querySelectorAll('.content-change-highlight').forEach(el => el.classList.remove('content-change-highlight'));
+    document.querySelector('.content-monitor-panel')?.remove();
+    console.log('Content Monitor: Stopped');
+    return;
+  }
+
+  const style = document.createElement('style');
+  style.textContent = `
+    .content-change-highlight {outline: 2px solid #ff6b35 !important; background-color: rgba(255, 107, 53, 0.1) !important;}
+    .content-monitor-panel {position: fixed; top: 20px; right: 20px; width: 320px; max-height: 350px; background: #2d3748; color: #e2e8f0; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 999999; font-family: monospace; font-size: 12px; overflow: hidden;}
+    .monitor-header {background: #1a202c; padding: 10px 12px; border-bottom: 1px solid #4a5568; display: flex; justify-content: space-between; align-items: center;}
+    .monitor-title {font-weight: bold; color: #63b3ed;}
+    .monitor-close {background: #e53e3e; color: white; border: none; border-radius: 3px; width: 18px; height: 18px; cursor: pointer; font-size: 11px;}
+    .monitor-content {padding: 0; max-height: 280px; overflow-y: auto;}
+    .change-item {padding: 6px 12px; border-bottom: 1px solid #4a5568; font-size: 11px;}
+    .change-type {color: #68d391; font-weight: bold;}
+    .change-details {color: #cbd5e0; margin-top: 2px;}
+    .change-warning {color: #fbb6ce; font-size: 10px;}
+    .change-success {color: #9ae6b4; font-size: 10px;}
+  `;
+  document.head.appendChild(style);
+
+  let changeCount = 0, isThrottled = false;
+  const panel = document.createElement('div');
+  panel.className = 'content-monitor-panel';
+  panel.innerHTML = `<div class="monitor-header"><div class="monitor-title">🔍 Monitor (0)</div><button class="monitor-close">×</button></div><div class="monitor-content" id="monitor-content"></div>`;
+  document.body.appendChild(panel);
+
+  const content = document.getElementById('monitor-content');
+  const title = panel.querySelector('.monitor-title');
+  panel.querySelector('.monitor-close').onclick = () => {window.contentMonitor.disconnect(); delete window.contentMonitor; panel.remove();};
+
+  const addChangeItem = (type, details, hasAriaLive) => {
+    if (isThrottled) return;
+    changeCount++; title.textContent = `🔍 Monitor (${changeCount})`;
+    const item = document.createElement('div'); item.className = 'change-item';
+    let note = (type==='Added'||type==='Text') ? `<div class="${hasAriaLive?'change-success':'change-warning'}">${hasAriaLive?'✅ Has aria-live':'⚠️ No aria-live'}</div>` : '';
+    item.innerHTML = `<div class="change-type">${type}</div><div class="change-details">${details}</div>${note}`;
+    content.insertBefore(item, content.firstChild);
+    while (content.children.length > 15) content.removeChild(content.lastChild);
+    isThrottled = true; setTimeout(()=>isThrottled=false,200);
+  };
+
+  const highlightElement = el => {if(el&&el.nodeType===1&&!el.closest('.content-monitor-panel')){el.classList.add('content-change-highlight'); setTimeout(()=>el.classList.remove('content-change-highlight'),1000);}};
+
+  const getSimpleDesc = el => {if(!el||el.nodeType!==1) return 'text'; const id=el.id?`#${el.id}`:''; return `${el.tagName.toLowerCase()}${id}`;};
+
+  const shouldIgnoreMutation = m => {
+    const t = m.target;
+    if (t.closest?.('.content-monitor-panel')) return true;
+    if (m.type==='attributes'&&['style','class'].includes(m.attributeName)&&t.classList.contains('content-change-highlight')) return true;
+    if (t.tagName==='SCRIPT'||t.closest?.('script')) return true;
+    if (m.type==='attributes'&&['style','class'].includes(m.attributeName)&&t.tagName==='BODY') return true;
+    return false;
+  };
+
+  const hasAriaLiveDeep = node => {
+    if (!node || node.nodeType !== 1) return false;
+    if (node.matches?.('[aria-live], [role="status"], [role="alert"], [role="log"]')) return true;
+    return !!node.querySelector?.('[aria-live], [role="status"], [role="alert"], [role="log"]');
+  };
+
+  const hasAriaLiveInDescendants = node => {
+    if (!node || node.nodeType !== 1) return false;
+    if (hasAriaLiveDeep(node)) return true;
+    return Array.from(node.children || []).some(child => hasAriaLiveInDescendants(child));
+  };
+
+  const activeElementHasAriaLive = () => {
+    const active = document.activeElement;
+    if (!active) return false;
+    if (active.closest('[aria-live], [role="status"], [role="alert"], [role="log"]')) return true;
+    return hasAriaLiveInDescendants(active);
+  };
+
+  const formAncestorHasAriaLive = () => {
+    const active = document.activeElement;
+    const form = active?.closest?.('form');
+    if (!form) return false;
+    if (form.matches('[aria-live], [role="status"], [role="alert"], [role="log"]')) return true;
+    return hasAriaLiveInDescendants(form);
+  };
+
+  window.contentMonitor = new MutationObserver(mutations => {
+    if (isThrottled) return;
+    const filtered = mutations.filter(m=>!shouldIgnoreMutation(m)).slice(0,5);
+    if (filtered.length===0) return;
+
+    filtered.forEach(m=>{
+      const t = m.target;
+      const hasLiveAncestor = !!(t.closest?.('[aria-live],[role="status"],[role="alert"],[role="log"]'));
+
+      if(m.type==='childList'&&m.addedNodes.length>0){
+        const added = Array.from(m.addedNodes).filter(n=>n.nodeType===1);
+        const finalAriaLiveStatus = hasLiveAncestor || added.some(node => hasAriaLiveInDescendants(node)) || activeElementHasAriaLive() || formAncestorHasAriaLive();
+        addChangeItem('Added', `${added.length} node(s) to ${getSimpleDesc(t)}`, finalAriaLiveStatus);
+        added.slice(0,2).forEach(highlightElement);
+
+      } else if(m.type==='characterData'){
+        const newText=t.textContent.slice(0,30);
+        addChangeItem('Text', `"${newText}..." in ${getSimpleDesc(t.parentElement)}`, hasLiveAncestor || activeElementHasAriaLive() || formAncestorHasAriaLive());
+        highlightElement(t.parentElement);
+
+      } else if(m.type==='attributes'&&!['style','class'].includes(m.attributeName)){
+        addChangeItem('Attribute', `${m.attributeName} on ${getSimpleDesc(t)}`, activeElementHasAriaLive() || formAncestorHasAriaLive());
+        highlightElement(t);
+      }
+    });
+  });
+
+  window.contentMonitor.observe(document.body, {
+    childList:true, subtree:true, attributes:true, attributeFilter:['aria-live','role','aria-label','aria-describedby','hidden','disabled'], characterData:true
+  });
+
+  addChangeItem('System', 'Monitor started - Click × to stop', false);
+})();
