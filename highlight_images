@@ -1,0 +1,263 @@
+javascript:(function(){
+  // Check if audit is already active
+  if (window.altAuditActive) {
+    // Remove existing audit
+    const existingElements = document.querySelectorAll('[data-alt-audit]');
+    existingElements.forEach(el => el.remove());
+    
+    const existingBorders = document.querySelectorAll('[data-alt-border]');
+    existingBorders.forEach(img => {
+      img.style.outline = img.getAttribute('data-original-outline') || '';
+      img.style.outlineOffset = img.getAttribute('data-original-outline-offset') || '';
+      img.style.boxShadow = img.getAttribute('data-original-box-shadow') || '';
+      img.removeAttribute('data-alt-border');
+      img.removeAttribute('data-original-outline');
+      img.removeAttribute('data-original-outline-offset');
+      img.removeAttribute('data-original-box-shadow');
+      img.removeEventListener('mouseenter', img.altAuditMouseEnter);
+      img.removeEventListener('mouseleave', img.altAuditMouseLeave);
+    });
+    
+    window.altAuditActive = false;
+    return;
+  }
+
+  // Mark audit as active
+  window.altAuditActive = true;
+
+  // Get all images on the page
+  const images = document.querySelectorAll('img');
+  
+  // Counters for summary
+  let totalImages = images.length;
+  let missingAlt = 0;
+  let emptyAlt = 0;
+  let describedAlt = 0;
+
+  // Function to get accessible label for an image
+  function getAccessibleLabel(img) {
+    // Check alt attribute first
+    if (img.hasAttribute('alt')) {
+      return { source: 'alt', value: img.getAttribute('alt') };
+    }
+    
+    // Check aria-label
+    if (img.hasAttribute('aria-label')) {
+      return { source: 'aria-label', value: img.getAttribute('aria-label') };
+    }
+    
+    // Check aria-labelledby
+    if (img.hasAttribute('aria-labelledby')) {
+      const labelId = img.getAttribute('aria-labelledby');
+      const labelElement = document.getElementById(labelId);
+      if (labelElement) {
+        return { source: 'aria-labelledby', value: labelElement.textContent.trim() };
+      }
+    }
+    
+    // Check if image is inside an anchor tag and check its accessible label
+    const parentAnchor = img.closest('a');
+    if (parentAnchor) {
+      if (parentAnchor.hasAttribute('aria-label')) {
+        return { source: 'parent-aria-label', value: parentAnchor.getAttribute('aria-label') };
+      }
+      if (parentAnchor.hasAttribute('aria-labelledby')) {
+        const labelId = parentAnchor.getAttribute('aria-labelledby');
+        const labelElement = document.getElementById(labelId);
+        if (labelElement) {
+          return { source: 'parent-aria-labelledby', value: labelElement.textContent.trim() };
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  // Function to create tooltip
+  function createTooltip(content, x, y) {
+    const tooltip = document.createElement('div');
+    tooltip.setAttribute('data-alt-audit', 'tooltip');
+    tooltip.style.cssText = `
+      position: fixed;
+      background: rgba(0, 0, 0, 0.9);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: Arial, sans-serif;
+      z-index: 999999;
+      max-width: 300px;
+      word-wrap: break-word;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      pointer-events: none;
+    `;
+    tooltip.textContent = content;
+    
+    document.body.appendChild(tooltip);
+    
+    // Position tooltip
+    const rect = tooltip.getBoundingClientRect();
+    let left = x + 10;
+    let top = y - rect.height - 10;
+    
+    // Adjust if tooltip goes off screen
+    if (left + rect.width > window.innerWidth) {
+      left = x - rect.width - 10;
+    }
+    if (top < 0) {
+      top = y + 10;
+    }
+    
+    tooltip.style.left = left + 'px';
+    tooltip.style.top = top + 'px';
+    
+    return tooltip;
+  }
+
+  // Process each image
+  images.forEach(img => {
+    const accessibleLabel = getAccessibleLabel(img);
+    let borderColor, tooltipText, category;
+    
+    if (!accessibleLabel) {
+      // Missing alt attribute entirely
+      borderColor = '#ff4444';
+      tooltipText = 'Alt attribute is missing';
+      category = 'missing';
+      missingAlt++;
+    } else if (accessibleLabel.value === '') {
+      // Empty alt attribute
+      borderColor = '#ffaa00';
+      tooltipText = `${accessibleLabel.source}: (empty) - Valid for decorative images`;
+      category = 'empty';
+      emptyAlt++;
+    } else {
+      // Has alt text
+      borderColor = '#44aa44';
+      tooltipText = `${accessibleLabel.source}: "${accessibleLabel.value}"`;
+      category = 'described';
+      describedAlt++;
+    }
+    
+    // Store original styles
+    img.setAttribute('data-original-outline', img.style.outline || '');
+    img.setAttribute('data-original-outline-offset', img.style.outlineOffset || '');
+    img.setAttribute('data-original-box-shadow', img.style.boxShadow || '');
+    img.setAttribute('data-alt-border', category);
+    
+    // Apply border with better visibility
+    img.style.outline = `3px solid ${borderColor}`;
+    img.style.outlineOffset = '2px';
+    img.style.boxShadow = `0 0 0 1px white, 0 0 0 4px ${borderColor}`;
+    
+    // Add hover functionality
+    img.altAuditMouseEnter = function(e) {
+      const rect = img.getBoundingClientRect();
+      createTooltip(tooltipText, e.clientX, e.clientY);
+    };
+    
+    img.altAuditMouseLeave = function() {
+      const existingTooltip = document.querySelector('[data-alt-audit="tooltip"]');
+      if (existingTooltip) {
+        existingTooltip.remove();
+      }
+    };
+    
+    img.addEventListener('mouseenter', img.altAuditMouseEnter);
+    img.addEventListener('mouseleave', img.altAuditMouseLeave);
+  });
+
+  // Create summary box
+  const summaryBox = document.createElement('div');
+  summaryBox.setAttribute('data-alt-audit', 'summary');
+  summaryBox.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: white;
+    border: 2px solid #333;
+    border-radius: 8px;
+    padding: 15px;
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    z-index: 999998;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    min-width: 200px;
+    cursor: move;
+    user-select: none;
+  `;
+  
+  // Make summary box draggable
+  let isDragging = false;
+  let currentX = 0;
+  let currentY = 0;
+  let initialX = 0;
+  let initialY = 0;
+  
+  function dragStart(e) {
+    initialX = e.clientX - currentX;
+    initialY = e.clientY - currentY;
+    isDragging = true;
+    summaryBox.style.cursor = 'grabbing';
+  }
+  
+  function dragEnd() {
+    isDragging = false;
+    summaryBox.style.cursor = 'move';
+  }
+  
+  function drag(e) {
+    if (isDragging) {
+      e.preventDefault();
+      currentX = e.clientX - initialX;
+      currentY = e.clientY - initialY;
+      
+      // Keep within viewport bounds
+      const rect = summaryBox.getBoundingClientRect();
+      const maxX = window.innerWidth - rect.width;
+      const maxY = window.innerHeight - rect.height;
+      
+      currentX = Math.max(0, Math.min(currentX, maxX));
+      currentY = Math.max(0, Math.min(currentY, maxY));
+      
+      summaryBox.style.transform = `translate(${currentX}px, ${currentY}px)`;
+    }
+  }
+  
+  summaryBox.addEventListener('mousedown', dragStart);
+  document.addEventListener('mousemove', drag);
+  document.addEventListener('mouseup', dragEnd);
+  
+  summaryBox.innerHTML = `
+    <div style="font-weight: bold; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 5px;">
+      Alt Text Audit Results
+    </div>
+    <div style="margin-bottom: 5px;">
+      <strong>Total Images:</strong> ${totalImages}
+    </div>
+    <div style="margin-bottom: 5px; color: #cc0000;">
+      <span style="display: inline-block; width: 12px; height: 12px; background: #ff4444; margin-right: 8px; border-radius: 2px;"></span>
+      <strong>Missing alt:</strong> ${missingAlt}
+    </div>
+    <div style="margin-bottom: 5px; color: #cc6600;">
+      <span style="display: inline-block; width: 12px; height: 12px; background: #ffaa00; margin-right: 8px; border-radius: 2px;"></span>
+      <strong>Empty alt:</strong> ${emptyAlt}
+    </div>
+    <div style="color: #006600;">
+      <span style="display: inline-block; width: 12px; height: 12px; background: #44aa44; margin-right: 8px; border-radius: 2px;"></span>
+      <strong>Described alt:</strong> ${describedAlt}
+    </div>
+    <div style="margin-top: 10px; font-size: 12px; color: #666; border-top: 1px solid #ccc; padding-top: 8px;">
+      📍 Drag to move • Click bookmarklet again to remove audit
+    </div>
+  `;
+  
+  document.body.appendChild(summaryBox);
+  
+  console.log('Alt text audit completed:', {
+    total: totalImages,
+    missing: missingAlt,
+    empty: emptyAlt,
+    described: describedAlt
+  });
+})();
