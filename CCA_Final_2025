@@ -1,0 +1,765 @@
+javascript:(function(){
+if(window.contrastChecker){window.contrastChecker.remove();return;}
+
+// Contrast ratio calculation function
+function getLuminance(r, g, b) {
+    const [rs, gs, bs] = [r, g, b].map(c => {
+        c = c / 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+}
+
+function getContrastRatio(color1, color2) {
+    const lum1 = getLuminance(...color1);
+    const lum2 = getLuminance(...color2);
+    const brightest = Math.max(lum1, lum2);
+    const darkest = Math.min(lum1, lum2);
+    return (brightest + 0.05) / (darkest + 0.05);
+}
+
+// Color conversion functions
+function hexToRgb(hex) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? [
+        parseInt(result[1], 16),
+        parseInt(result[2], 16),
+        parseInt(result[3], 16)
+    ] : null;
+}
+
+function rgbToHex(r, g, b) {
+    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h, s, l = (max + min) / 2;
+    
+    if (max === min) {
+        h = s = 0;
+    } else {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+    }
+    
+    return [Math.round(h * 360), Math.round(s * 100), Math.round(l * 100)];
+}
+
+function hslToRgb(h, s, l) {
+    h /= 360; s /= 100; l /= 100;
+    
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h * 6) % 2 - 1));
+    const m = l - c / 2;
+    
+    let r, g, b;
+    if (h < 1/6) [r, g, b] = [c, x, 0];
+    else if (h < 2/6) [r, g, b] = [x, c, 0];
+    else if (h < 3/6) [r, g, b] = [0, c, x];
+    else if (h < 4/6) [r, g, b] = [0, x, c];
+    else if (h < 5/6) [r, g, b] = [x, 0, c];
+    else [r, g, b] = [c, 0, x];
+    
+    return [
+        Math.round((r + m) * 255),
+        Math.round((g + m) * 255),
+        Math.round((b + m) * 255)
+    ];
+}
+
+function rgbToHsv(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h, s, v = max;
+    
+    const d = max - min;
+    s = max === 0 ? 0 : d / max;
+    
+    if (max === min) {
+        h = 0;
+    } else {
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+    }
+    
+    return [Math.round(h * 360), Math.round(s * 100), Math.round(v * 100)];
+}
+
+// Get computed colors with layered text support
+function getComputedColors(element) {
+    const style = window.getComputedStyle(element);
+    const color = style.color;
+    const backgroundColor = style.backgroundColor;
+    
+    function parseColor(colorStr) {
+        if (colorStr === 'rgba(0, 0, 0, 0)' || colorStr === 'transparent') return null;
+        
+        const rgbMatch = colorStr.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+        if (rgbMatch) {
+            const alpha = rgbMatch[4] ? parseFloat(rgbMatch[4]) : 1;
+            return [parseInt(rgbMatch[1]), parseInt(rgbMatch[2]), parseInt(rgbMatch[3]), alpha];
+        }
+        
+        if (colorStr.startsWith('#')) {
+            const rgb = hexToRgb(colorStr);
+            return rgb ? [...rgb, 1] : null;
+        }
+        
+        return null;
+    }
+    
+    return {
+        foreground: parseColor(color),
+        background: parseColor(backgroundColor)
+    };
+}
+
+// Find background color by traversing parent elements with layered support
+function findBackgroundColor(element) {
+    let current = element;
+    let compositeBackground = [255, 255, 255, 1]; // Start with white
+    
+    while (current && current !== document.body) {
+        const style = window.getComputedStyle(current);
+        const bg = style.backgroundColor;
+        if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+            const rgbMatch = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+            if (rgbMatch) {
+                const layerColor = [
+                    parseInt(rgbMatch[1]), 
+                    parseInt(rgbMatch[2]), 
+                    parseInt(rgbMatch[3]),
+                    rgbMatch[4] ? parseFloat(rgbMatch[4]) : 1
+                ];
+                
+                // Alpha compositing
+                const alpha = layerColor[3];
+                compositeBackground = [
+                    Math.round(layerColor[0] * alpha + compositeBackground[0] * (1 - alpha)),
+                    Math.round(layerColor[1] * alpha + compositeBackground[1] * (1 - alpha)),
+                    Math.round(layerColor[2] * alpha + compositeBackground[2] * (1 - alpha)),
+                    alpha + compositeBackground[3] * (1 - alpha)
+                ];
+                
+                if (alpha >= 0.95) break; // Effectively opaque
+            }
+        }
+        current = current.parentElement;
+    }
+    return [compositeBackground[0], compositeBackground[1], compositeBackground[2]];
+}
+
+// Eyedropper functionality
+function createEyedropper(callback) {
+    if ('EyeDropper' in window) {
+        const eyeDropper = new EyeDropper();
+        return eyeDropper.open().then(result => {
+            const rgb = hexToRgb(result.sRGBHex);
+            if (rgb) callback(rgb);
+        }).catch(() => {
+            console.log('EyeDropper cancelled or failed');
+        });
+    } else {
+        return createCustomEyedropper(callback);
+    }
+}
+
+function createCustomEyedropper(callback) {
+    const magnifier = document.createElement('div');
+    magnifier.style.cssText = `
+        position: fixed;
+        width: 100px;
+        height: 100px;
+        border: 3px solid #000;
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 1000000;
+        background: white;
+        box-shadow: 0 0 0 2px white;
+        display: none;
+    `;
+    document.body.appendChild(magnifier);
+    
+    const crosshair = document.createElement('div');
+    crosshair.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 20px;
+        height: 20px;
+        margin: -10px 0 0 -10px;
+        border: 2px solid red;
+        box-sizing: border-box;
+    `;
+    magnifier.appendChild(crosshair);
+    
+    let isActive = false;
+    
+    function startEyedropper() {
+        isActive = true;
+        magnifier.style.display = 'block';
+        document.body.style.cursor = 'crosshair';
+    }
+    
+    function handleMouseMove(e) {
+        if (!isActive) return;
+        magnifier.style.left = (e.clientX + 20) + 'px';
+        magnifier.style.top = (e.clientY + 20) + 'px';
+        
+        const element = document.elementFromPoint(e.clientX, e.clientY);
+        if (element) {
+            const style = window.getComputedStyle(element);
+            magnifier.style.background = style.color || style.backgroundColor || 'white';
+        }
+    }
+    
+    function handleClick(e) {
+        if (!isActive) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const element = document.elementFromPoint(e.clientX, e.clientY);
+        if (element) {
+            const colors = getComputedColors(element);
+            if (colors.foreground) {
+                callback([colors.foreground[0], colors.foreground[1], colors.foreground[2]]);
+            }
+        }
+        
+        cleanup();
+    }
+    
+    function cleanup() {
+        isActive = false;
+        magnifier.style.display = 'none';
+        document.body.style.cursor = '';
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('click', handleClick);
+        document.removeEventListener('keydown', handleKeydown);
+        magnifier.remove();
+    }
+    
+    function handleKeydown(e) {
+        if (e.key === 'Escape') {
+            cleanup();
+        }
+    }
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('click', handleClick);
+    document.addEventListener('keydown', handleKeydown);
+    
+    startEyedropper();
+    
+    return Promise.resolve();
+}
+
+// Create HSL slider color picker (similar to WebAIM)
+function createHSLColorPicker(container, initialColor, callback) {
+    const pickerDiv = document.createElement('div');
+    pickerDiv.style.cssText = 'margin: 10px 0; padding: 10px; border: 1px solid #000000; border-radius: 4px;';
+    
+    // Convert initial RGB to HSL
+    let [h, s, l] = rgbToHsl(...initialColor);
+    
+    // Store the current color's HSL values (these will be updated when color is picked)
+    let currentHue = h;
+    let currentSat = s;
+    let currentLight = l;
+    
+    // Eyedropper button
+    const eyedropperBtn = document.createElement('button');
+    eyedropperBtn.textContent = '🎨 Pick Color';
+    eyedropperBtn.style.cssText = `
+        background: #007cba;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-bottom: 10px;
+        display: block;
+        width: 100%;
+        height: 40px;
+    `;
+    eyedropperBtn.addEventListener('click', () => {
+        createEyedropper((pickedColor) => {
+            // Update current HSL values from picked color
+            [currentHue, currentSat, currentLight] = rgbToHsl(...pickedColor);
+            callback(pickedColor);
+            pickerDiv.updateFromRGB(pickedColor);
+        });
+    });
+    pickerDiv.appendChild(eyedropperBtn);
+    
+    // Color preview
+    const colorPreview = document.createElement('div');
+    colorPreview.style.cssText = `
+        width: 100%;
+        height: 40px;
+        border: 2px solid #333;
+        border-radius: 4px;
+        margin-bottom: 15px;
+        background-color: rgb(${initialColor.join(',')});
+    `;
+    pickerDiv.appendChild(colorPreview);
+    
+    function updateColor() {
+        // Use current HSL values (these get updated when color is picked)
+        const rgb = hslToRgb(currentHue, currentSat, currentLight);
+        colorPreview.style.backgroundColor = `rgb(${rgb.join(',')})`;
+        callback(rgb);
+        updateSliderBackgrounds();
+    }
+    
+    function updateSliderBackgrounds() {
+        lightSlider.style.background = `linear-gradient(to right, 
+            hsl(${currentHue}, ${currentSat}%, 0%), 
+            hsl(${currentHue}, ${currentSat}%, 50%), 
+            hsl(${currentHue}, ${currentSat}%, 100%))`;
+    }
+    
+    // Create slider function
+    function createSlider(label, min, max, value, unit = '') {
+        const sliderContainer = document.createElement('div');
+        sliderContainer.style.cssText = 'margin-bottom: 15px;';
+        
+        const labelDiv = document.createElement('div');
+        labelDiv.style.cssText = 'display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: bold;';
+        
+        const labelText = document.createElement('span');
+        labelText.textContent = label;
+        
+        const valueText = document.createElement('span');
+        valueText.textContent = value + unit;
+        
+        labelDiv.appendChild(labelText);
+        labelDiv.appendChild(valueText);
+        sliderContainer.appendChild(labelDiv);
+        
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = min;
+        slider.max = max;
+        slider.value = value;
+        slider.style.cssText = `
+            width: 100%;
+            height: 20px;
+            border-radius: 10px;
+            outline: none;
+            -webkit-appearance: none;
+            appearance: none;
+        `;
+        
+        // Webkit slider thumb styling
+        const style = document.createElement('style');
+        style.textContent = `
+            input[type="range"]::-webkit-slider-thumb {
+                -webkit-appearance: none;
+                appearance: none;
+                width: 20px;
+                height: 20px;
+                border-radius: 50%;
+                background: #333;
+                border: 2px solid white;
+                box-shadow: 0 0 5px rgba(0,0,0,0.3);
+                cursor: pointer;
+            }
+            input[type="range"]::-moz-range-thumb {
+                width: 20px;
+                height: 20px;
+                border-radius: 50%;
+                background: #333;
+                border: 2px solid white;
+                box-shadow: 0 0 5px rgba(0,0,0,0.3);
+                cursor: pointer;
+            }
+        `;
+        document.head.appendChild(style);
+        
+        slider.addEventListener('input', function() {
+            valueText.textContent = slider.value + unit;
+            return slider.value;
+        });
+        
+        sliderContainer.appendChild(slider);
+        pickerDiv.appendChild(sliderContainer);
+        
+        return { slider, valueText };
+    }
+    
+    const lightControl = createSlider('Lightness', 0, 100, l, '%');
+    const lightSlider = lightControl.slider;
+    
+    lightSlider.addEventListener('input', function() {
+        currentLight = parseInt(lightSlider.value);  // Update currentLight instead of l
+        lightControl.valueText.textContent = currentLight + '%';
+        updateColor();
+    });
+    
+    // Initial slider background update
+    updateSliderBackgrounds();
+    
+    // Return object with update method
+    pickerDiv.updateFromRGB = function(rgb) {
+        [currentHue, currentSat, currentLight] = rgbToHsl(...rgb);  // Update current values
+        
+        lightSlider.value = currentLight;
+        lightControl.valueText.textContent = currentLight + '%';
+        colorPreview.style.backgroundColor = `rgb(${rgb.join(',')})`;
+        
+        updateSliderBackgrounds();
+    };
+    
+    container.appendChild(pickerDiv);
+    return pickerDiv;
+}
+
+// Create format converter
+function createFormatConverter(container, color, callback) {
+    const converterDiv = document.createElement('div');
+    converterDiv.style.cssText = 'margin: 10px 0; padding: 10px; border: 1px solid #000000; border-radius: 4px;';
+    
+    const formatSelect = document.createElement('select');
+    formatSelect.style.cssText = 'width: calc(100% - 15px); padding: 5px; margin-left: 5px; border: 1px solid #; border-radius: 3px; margin-bottom: 15px; height: 50px;';
+    ['HEX', 'RGB', 'HSL'].forEach(format => {
+        const option = document.createElement('option');
+        option.value = format;
+        option.textContent = format;
+        formatSelect.appendChild(option);
+    });
+    
+    const valueInput = document.createElement('input');
+    valueInput.type = 'text';
+    valueInput.style.cssText = 'width: calc(100% - 15px); padding: 5px; margin-left: 5px; border: 1px solid #000000; border-radius: 3px; margin-bottom: 5px; height: 50px;';
+    
+    function updateValue() {
+        const format = formatSelect.value;
+        const [r, g, b] = color;
+        
+        switch (format) {
+            case 'HEX':
+                valueInput.value = rgbToHex(r, g, b);
+                break;
+            case 'RGB':
+                valueInput.value = `rgb(${r}, ${g}, ${b})`;
+                break;
+            case 'HSL':
+                const [h, s, l] = rgbToHsl(r, g, b);
+                valueInput.value = `hsl(${h}, ${s}%, ${l}%)`;
+                break;
+        }
+    }
+    
+    function setColor(newColor) {
+        color = newColor;
+        updateValue();
+    }
+    
+    formatSelect.addEventListener('change', updateValue);
+    updateValue();
+    
+    valueInput.addEventListener('input', function() {
+        const value = valueInput.value.trim();
+        let newColor = null;
+        
+        if (value.startsWith('#')) {
+            newColor = hexToRgb(value);
+        } else if (value.startsWith('rgb')) {
+            const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+            if (match) {
+                newColor = [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
+            }
+        } else if (value.startsWith('hsl')) {
+            const match = value.match(/hsla?\((\d+),\s*(\d+)%,\s*(\d+)%/);
+            if (match) {
+                newColor = hslToRgb(parseInt(match[1]), parseInt(match[2]), parseInt(match[3]));
+            }
+        }
+        
+        if (newColor) {
+            callback(newColor);
+        }
+    });
+    
+    const inputContainer = document.createElement('div');
+    inputContainer.style.cssText = 'display: flex; flex-direction: column; align-items: flex-start;';
+    inputContainer.appendChild(formatSelect);
+    inputContainer.appendChild(valueInput);
+    
+    converterDiv.appendChild(inputContainer);
+    container.appendChild(converterDiv);
+    
+    return { update: updateValue, setColor: setColor };
+}
+
+// Create main overlay
+const overlay = document.createElement('div');
+overlay.id = 'contrast-checker-overlay';
+overlay.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    width: 380px;
+    max-height: 90vh;
+    background: #fff;
+    border: 2px solid #333;
+    border-radius: 8px;
+    padding: 20px;
+    z-index: 999999;
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    overflow-y: auto;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    cursor: move;
+`;
+
+// Make overlay draggable
+let isDragging = false;
+let dragOffset = { x: 0, y: 0 };
+
+overlay.addEventListener('mousedown', function(e) {
+    if (e.target === overlay || e.target === overlay.querySelector('h3')) {
+        isDragging = true;
+        dragOffset.x = e.clientX - overlay.offsetLeft;
+        dragOffset.y = e.clientY - overlay.offsetTop;
+        overlay.style.cursor = 'grabbing';
+    }
+});
+
+document.addEventListener('mousemove', function(e) {
+    if (isDragging) {
+        overlay.style.left = (e.clientX - dragOffset.x) + 'px';
+        overlay.style.top = (e.clientY - dragOffset.y) + 'px';
+        overlay.style.right = 'auto';
+    }
+});
+
+document.addEventListener('mouseup', function() {
+    isDragging = false;
+    overlay.style.cursor = 'move';
+});
+
+// Header
+const header = document.createElement('h3');
+header.textContent = 'Color Contrast Checker';
+header.style.cssText = 'margin: 0 0 15px 0; color: #333; border-bottom: 2px solid #333; padding-bottom: 10px; font-size: 18px; font-weight: bold;';
+overlay.appendChild(header);
+
+// Close button
+const closeBtn = document.createElement('button');
+closeBtn.textContent = '×';
+closeBtn.style.cssText = `
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #666;
+`;
+closeBtn.addEventListener('click', () => overlay.remove());
+overlay.appendChild(closeBtn);
+
+// Results section
+const resultsDiv = document.createElement('div');
+resultsDiv.id = 'results';
+resultsDiv.style.cssText = 'margin-bottom: 20px; padding: 15px; border: 2px solid #ddd; border-radius: 4px; min-height: 80px; background: #f9f9f9;';
+resultsDiv.innerHTML = '<em>Click on text elements to check contrast, or use manual input below.</em>';
+overlay.appendChild(resultsDiv);
+
+// Manual input section
+const manualSection = document.createElement('div');
+manualSection.innerHTML = '<h4 style="margin: 15px 0 10px 0; color: #333;">Manual Color Input:</h4>';
+overlay.appendChild(manualSection);
+
+// Foreground color section
+const fgSection = document.createElement('div');
+fgSection.innerHTML = '<strong style="color: #333;">Foreground (Text) Color:</strong>';
+overlay.appendChild(fgSection);
+
+let fgColor = [0, 0, 0];
+let bgColor = [255, 255, 255];
+
+const fgConverter = createFormatConverter(fgSection, fgColor, (newColor) => {
+    fgColor = newColor;
+    fgPicker.updateFromRGB(fgColor);
+    updateManualResults();
+});
+
+const fgPicker = createHSLColorPicker(fgSection, fgColor, (newColor) => {
+    fgColor = newColor;
+    fgConverter.setColor(fgColor);
+    updateManualResults();
+});
+
+// Background color section
+const bgSection = document.createElement('div');
+bgSection.innerHTML = '<strong style="color: #333;">Background Color:</strong>';
+bgSection.style.marginTop = '20px';
+overlay.appendChild(bgSection);
+
+const bgConverter = createFormatConverter(bgSection, bgColor, (newColor) => {
+    bgColor = newColor;
+    bgPicker.updateFromRGB(bgColor);
+    updateManualResults();
+});
+
+const bgPicker = createHSLColorPicker(bgSection, bgColor, (newColor) => {
+    bgColor = newColor;
+    bgConverter.setColor(bgColor);
+    updateManualResults();
+});
+
+// Update manual results
+function updateManualResults() {
+    const ratio = getContrastRatio(fgColor, bgColor);
+    displayResults(ratio, fgColor, bgColor, 'Manual Input');
+}
+
+// Display results function
+function displayResults(ratio, fg, bg, source) {
+    const normalPass = ratio >= 4.5;
+    const largePass = ratio >= 3.0;
+    const uiPass = ratio >= 3.0;
+    
+    resultsDiv.innerHTML = `
+        <div style="margin-bottom: 15px;">
+            <strong>Source:</strong> ${source}<br>
+            <strong>Contrast Ratio:</strong> <span style="font-size: 18px; font-weight: bold;">${ratio.toFixed(2)}:1</span>
+        </div>
+        <div style="display: flex; gap: 15px; margin-bottom: 15px; align-items: center;">
+            <div style="text-align: center;">
+                <div style="width: 40px; height: 40px; background-color: rgb(${fg.join(',')}); border: 2px solid #000; margin-bottom: 5px;"></div>
+                <small>Foreground</small>
+            </div>
+            <div style="text-align: center;">
+                <div style="width: 40px; height: 40px; background-color: rgb(${bg.join(',')}); border: 2px solid #000; margin-bottom: 5px;"></div>
+                <small>Background</small>
+            </div>
+            <div style="flex: 1; background: rgb(${bg.join(',')}); color: rgb(${fg.join(',')}); padding: 10px; border: 1px solid #000000; text-align: center; font-weight: bold; margin-top: -22px;">
+                Sample Text
+            </div>
+        </div>
+        <div style="margin-bottom: 8px;">
+            <strong>Normal Text (4.5:1 required):</strong> 
+            <span style="color: ${normalPass ? 'green' : 'red'}; font-weight: bold; font-size: 16px;">
+                ${normalPass ? 'PASS ✓' : 'FAIL ✗'}
+            </span>
+        </div>
+        <div style="margin-bottom: 8px;">
+            <strong>Large Text (3:1 required):</strong> 
+            <span style="color: ${largePass ? 'green' : 'red'}; font-weight: bold; font-size: 16px;">
+                ${largePass ? 'PASS ✓' : 'FAIL ✗'}
+            </span>
+        </div>
+        <div>
+            <strong>UI Components (3:1 required):</strong> 
+            <span style="color: ${uiPass ? 'green' : 'red'}; font-weight: bold; font-size: 16px;">
+                ${uiPass ? 'PASS ✓' : 'FAIL ✗'}
+            </span>
+        </div>
+    `;
+}
+
+// Attach click handler to document
+function attachClickHandler(doc) {
+    doc.addEventListener('click', function(e) {
+        if (e.target.closest('#contrast-checker-overlay')) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const element = e.target;
+        const colors = getComputedColors(element);
+        
+        let fg = colors.foreground;
+        let bg = colors.background || findBackgroundColor(element);
+        
+        if (!fg) fg = [0, 0, 0];
+        if (!bg) bg = [255, 255, 255];
+        
+        // Remove alpha channel for contrast calculation
+        if (fg.length > 3) fg = fg.slice(0, 3);
+        if (bg.length > 3) bg = bg.slice(0, 3);
+        
+        const ratio = getContrastRatio(fg, bg);
+        
+        // Update manual inputs
+        fgColor = fg;
+        bgColor = bg;
+        fgConverter.setColor(fgColor);
+        bgConverter.setColor(bgColor);
+        fgPicker.updateFromRGB(fgColor);
+        bgPicker.updateFromRGB(bgColor);
+        
+        displayResults(ratio, fg, bg, `${element.tagName.toLowerCase()}${element.className ? '.' + element.className.split(' ')[0] : ''}`);
+    }, true);
+}
+
+// Attach to main document and scan iframes
+attachClickHandler(document);
+
+const iframes = document.querySelectorAll('iframe');
+iframes.forEach(iframe => {
+    try {
+        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+        if (iframeDoc) {
+            attachClickHandler(iframeDoc);
+        }
+    } catch (e) {
+        console.log('Cross-origin iframe detected, limited access');
+    }
+});
+
+document.body.appendChild(overlay);
+window.contrastChecker = overlay;
+
+// Initial results
+updateManualResults();
+
+// Instructions link
+const instructionsLink = document.createElement('a');
+instructionsLink.href = '#';
+instructionsLink.textContent = 'Instructions';
+instructionsLink.style.cssText = 'margin-top: 20px; font-size: 12px; color: #007cba; border-top: 1px solid #ddd; padding-top: 15px; text-decoration: underline; cursor: pointer; display: block;';
+
+// Instructions content (hidden by default)
+const instructionsContent = document.createElement('div');
+instructionsContent.style.cssText = 'margin-top: 10px; font-size: 12px; color: #666; display: none;';
+instructionsContent.innerHTML = `
+    • Click any text element to check its contrast<br>
+    • Use HSL sliders to adjust colors precisely<br>
+    • Use 🎨 Pick Color buttons for eyedropper tool<br>
+    • Use format converters for direct input (HEX, RGB, HSL)<br>
+    • Drag this overlay to move it around<br>
+    • Requirements: Normal text 4.5:1, Large text 3:1, UI elements 3:1<br>
+    • Press ESC to cancel eyedropper mode
+`;
+
+// Toggle functionality
+instructionsLink.addEventListener('click', function(e) {
+    e.preventDefault();
+    const isVisible = instructionsContent.style.display !== 'none';
+    instructionsContent.style.display = isVisible ? 'none' : 'block';
+    instructionsLink.textContent = isVisible ? 'Instructions' : 'Hide Instructions';
+});
+
+overlay.appendChild(instructionsLink);
+overlay.appendChild(instructionsContent);
+
+})();
