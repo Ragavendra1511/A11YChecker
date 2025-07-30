@@ -1,0 +1,740 @@
+javascript:(()=>{
+const CLS = '__headingInspector';
+
+if (document.querySelector('#' + CLS + '-panel')) {
+    const existing = document.querySelector('#' + CLS + '-panel');
+    existing.style.display = existing.style.display === 'none' ? 'block' : 'none';
+    return;
+}
+
+const COLORS = {
+    h1: '#dc2626', // red-600
+    h2: '#2563eb', // blue-600  
+    h3: '#059669', // emerald-600
+    h4: '#d97706', // amber-600
+    h5: '#7c3aed', // violet-600
+    h6: '#dc2626'  // pink-600
+};
+
+const ERROR_TYPES = {
+    SKIP: { icon: '⚠️', text: 'Skipped heading level', severity: 'warning' },
+    EMPTY: { icon: '❌', text: 'Empty heading content', severity: 'error' },
+    ARIA: { icon: '⚠️', text: 'ARIA role override detected', severity: 'warning' },
+    MULTI: { icon: '❌', text: 'Multiple H1 elements found', severity: 'error' },
+    HIDDEN: { icon: '⚠️', text: 'Hidden from screen readers', severity: 'warning' },
+    ROLE: { icon: '❌', text: 'Invalid role=heading usage', severity: 'error' },
+    NEST: { icon: '⚠️', text: 'Nested inside interactive element', severity: 'warning' }
+};
+
+// Main panel
+const panel = document.createElement('aside');
+panel.id = CLS + '-panel';
+panel.style.cssText = `
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 380px;
+    height: 100vh;
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+    color: #1f2937;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.15);
+    z-index: 2147483647;
+    border-left: 1px solid #e5e7eb;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+`;
+
+// Styling and drag handle
+const header = `
+    <div id="${CLS}-header" style="
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+        color: white;
+        padding: 16px 20px;
+        border-bottom: 1px solid #e5e7eb;
+        flex-shrink: 0;
+        cursor: move;
+        user-select: none;
+        position: relative;
+    ">
+        <h2 style="margin: 0 0 12px 0; font-size: 18px; font-weight: 600; pointer-events: none;">
+            🔍 Heading Inspector
+        </h2>
+        <div style="display: flex; flex-direction: row; align-items: flex-start; gap: 8px;">
+            <button id="${CLS}-toggle" style="
+                background: rgba(255,255,255,0.2);
+                border: 1px solid rgba(255,255,255,0.3);
+                color: white;
+                padding: 6px 12px;
+                border-radius: 6px;
+                font-size: 12px;
+                cursor: pointer;
+                transition: all 0.2s;
+            " title="Hide/Show visual indicators">
+                👁️ Toggle View
+            </button>
+            <button id="${CLS}-violations" style="
+                background: rgba(255,255,255,0.2);
+                border: 1px solid rgba(255,255,255,0.3);
+                color: white;
+                padding: 6px 12px;
+                border-radius: 6px;
+                font-size: 12px;
+                cursor: pointer;
+                transition: all 0.2s;
+            " title="Show only violations">
+                ⚠️ Violations Only
+            </button>
+            <button id="${CLS}-export" style="
+                background: rgba(255,255,255,0.2);
+                border: 1px solid rgba(255,255,255,0.3);
+                color: white;
+                padding: 6px 12px;
+                border-radius: 6px;
+                font-size: 12px;
+                cursor: pointer;
+                transition: all 0.2s;
+            " title="Export heading outline">
+                📄 Export
+            </button>
+            <button id="${CLS}-close" style="
+                background: rgba(239, 68, 68, 0.8);
+                border: 1px solid rgba(239, 68, 68, 0.9);
+                color: white;
+                padding: 6px 12px;
+                border-radius: 6px;
+                font-size: 12px;
+                cursor: pointer;
+                transition: all 0.2s;
+                margin-left: auto;
+            " title="Close inspector">
+                ✖️ Close
+            </button>
+        </div>
+        <div style="
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            font-size: 10px;
+            opacity: 0.7;
+            pointer-events: none;
+        ">Drag to move</div>
+    </div>
+`;
+
+// Stats section
+const statsSection = `
+    <div id="${CLS}-stats" style="
+        padding: 16px 20px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e5e7eb;
+        flex-shrink: 0;
+    ">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 12px;">
+            <div>
+                <strong style="color: #374151;">Total Headings:</strong>
+                <span id="${CLS}-total">0</span>
+            </div>
+            <div>
+                <strong style="color: #dc2626;">Violations:</strong>
+                <span id="${CLS}-violation-count">0</span>
+            </div>
+        </div>
+        <div id="${CLS}-level-stats" style="margin-top: 8px; font-size: 11px;"></div>
+    </div>
+`;
+
+// Content area
+const contentArea = `
+    <div style="flex: 1; overflow-y: auto; padding: 0;">
+        <div id="${CLS}-content" style="padding: 16px 0;"></div>
+    </div>
+`;
+
+panel.innerHTML = header + statsSection + contentArea;
+document.body.appendChild(panel);
+
+// Enhanced styles
+const styles = document.createElement('style');
+styles.textContent = `
+    .${CLS}-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 20px;
+        margin-right: 6px;
+        padding: 2px 6px;
+        font-size: 11px;
+        font-weight: 600;
+        color: white;
+        border-radius: 4px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        position: relative;
+        z-index: 1000;
+    }
+    
+    .${CLS}-violation {
+        outline: 2px solid #dc2626 !important;
+        outline-offset: 2px !important;
+        position: relative;
+    }
+    
+    .${CLS}-violation::before {
+        content: '⚠️';
+        position: absolute;
+        top: -8px;
+        right: -8px;
+        background: #dc2626;
+        color: white;
+        border-radius: 50%;
+        width: 16px;
+        height: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        z-index: 1001;
+    }
+    
+    .${CLS}-tooltip {
+        position: absolute;
+        background: #1f2937;
+        color: white;
+        padding: 8px 12px;
+        font-size: 12px;
+        border-radius: 6px;
+        white-space: pre-line;
+        z-index: 2147483646;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+        max-width: 250px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    
+    .${CLS}-tooltip::after {
+        content: '';
+        position: absolute;
+        top: 100%;
+        left: 12px;
+        border: 4px solid transparent;
+        border-top-color: #1f2937;
+    }
+    
+    .${CLS}-hide .${CLS}-badge {
+        opacity: 0.3;
+    }
+    
+    .${CLS}-hide .${CLS}-violation {
+        outline: none !important;
+    }
+    
+    .${CLS}-hide .${CLS}-violation::before {
+        display: none !important;
+    }
+    
+    .${CLS}-item {
+        padding: 12px 20px;
+        border-bottom: 1px solid #f3f4f6;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        position: relative;
+    }
+    
+    .${CLS}-item:hover {
+        background: #f8fafc;
+        transform: translateX(4px);
+    }
+    
+    .${CLS}-item:last-child {
+        border-bottom: none;
+    }
+    
+    .${CLS}-item-content {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .${CLS}-item-text {
+        flex: 1;
+        line-height: 1.4;
+    }
+    
+    .${CLS}-item-errors {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 4px;
+    }
+    
+    .${CLS}-error-badge {
+        background: #fef2f2;
+        color: #dc2626;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 10px;
+        border: 1px solid #fecaca;
+    }
+    
+    .${CLS}-warning-badge {
+        background: #fffbeb;
+        color: #d97706;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 10px;
+        border: 1px solid #fed7aa;
+    }
+`;
+document.head.appendChild(styles);
+
+// Enhanced hidden element detection function
+function isElementHidden(element) {
+    // Check if element or any ancestor has display:none or visibility:hidden
+    let current = element;
+    while (current && current !== document.body) {
+        const styles = getComputedStyle(current);
+        
+        // Check display and visibility
+        if (styles.display === 'none' || styles.visibility === 'hidden') {
+            return true;
+        }
+        
+        // Check for hidden attribute
+        if (current.hasAttribute('hidden')) {
+            return true;
+        }
+        
+        // Check for aria-hidden="true"
+        if (current.getAttribute('aria-hidden') === 'true') {
+            return true;
+        }
+        
+        // Check for zero dimensions (but allow elements that might be clipped)
+        const rect = current.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0 && styles.overflow === 'hidden') {
+            return true;
+        }
+        
+        current = current.parentElement;
+    }
+    
+    return false;
+}
+
+// Scan for headings with improved detection (excluding inspector panel)
+function scanHeadings() {
+    const headings = [];
+    const walker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_ELEMENT,
+        {
+            acceptNode: function(node) {
+                // Skip the inspector panel and its contents
+                if (node.id === CLS + '-panel' || node.closest('#' + CLS + '-panel')) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        }
+    );
+
+    while (walker.nextNode()) {
+        const el = walker.currentNode;
+        let level = null;
+        let type = 'native';
+
+        // Native headings
+        if (/^H[1-6]$/i.test(el.tagName)) {
+            level = parseInt(el.tagName[1]);
+        }
+        // ARIA headings
+        else if (el.getAttribute('role') === 'heading') {
+            type = 'aria';
+            const ariaLevel = el.getAttribute('aria-level');
+            level = ariaLevel ? parseInt(ariaLevel) : 2; // Default to 2 if no aria-level
+        }
+
+        if (level) {
+            headings.push({ el, level, type });
+        }
+    }
+
+    return headings;
+}
+
+// Analyze headings for violations
+function analyzeHeadings(headings) {
+    const violations = [];
+    const stats = { total: headings.length, levels: {} };
+    let previousLevel = 0;
+    let h1Count = 0;
+
+    headings.forEach((heading, index) => {
+        const { el, level, type } = heading;
+        const text = (el.textContent || '').trim();
+        const errors = [];
+
+        // Count levels
+        stats.levels[level] = (stats.levels[level] || 0) + 1;
+
+        // Count H1s
+        if (level === 1) h1Count++;
+
+        // Check for violations
+        if (text === '') {
+            errors.push('EMPTY');
+        }
+
+        if (previousLevel > 0 && level - previousLevel > 1) {
+            errors.push('SKIP');
+        }
+
+        if (type === 'native' && el.hasAttribute('role') && el.getAttribute('role') !== 'heading') {
+            errors.push('ARIA');
+        }
+
+        if (type === 'aria' && (!level || level < 1 || level > 6)) {
+            errors.push('ROLE');
+        }
+
+        // Enhanced hidden element detection
+        const isHidden = isElementHidden(el);
+        if (isHidden) {
+            errors.push('HIDDEN');
+        }
+
+        const interactiveParent = el.closest('button, input, select, textarea, a[href]');
+        if (interactiveParent) {
+            errors.push('NEST');
+        }
+
+        heading.errors = errors;
+        heading.text = text;
+
+        if (errors.length > 0) {
+            violations.push(heading);
+        }
+
+        previousLevel = level;
+    });
+
+    // Check for multiple H1s
+    if (h1Count > 1) {
+        headings.filter(h => h.level === 1).forEach(h => {
+            if (!h.errors.includes('MULTI')) {
+                h.errors.push('MULTI');
+                if (!violations.includes(h)) {
+                    violations.push(h);
+                }
+            }
+        });
+    }
+
+    return { headings, violations, stats };
+}
+
+// Add visual indicators to headings
+function addVisualIndicators(headings) {
+    headings.forEach(heading => {
+        const { el, level, errors } = heading;
+        
+        // Create badge
+        const badge = document.createElement('span');
+        badge.className = CLS + '-badge';
+        badge.style.backgroundColor = COLORS[`h${level}`] || '#6b7280';
+        badge.textContent = level;
+        
+        // Add violation styling
+        if (errors.length > 0) {
+            el.classList.add(CLS + '-violation');
+        }
+        
+        // Position badge
+        if (el.style.position === '' || el.style.position === 'static') {
+            el.style.position = 'relative';
+        }
+        
+        el.insertAdjacentElement('afterbegin', badge);
+        
+        // Add tooltip functionality
+        badge.addEventListener('mouseenter', (e) => {
+            showTooltip(e, errors, level);
+        });
+        
+        badge.addEventListener('mouseleave', hideTooltip);
+    });
+}
+
+// Tooltip functions
+function showTooltip(event, errors, level) {
+    let tooltip = document.querySelector('.' + CLS + '-tooltip');
+    if (!tooltip) {
+        tooltip = document.createElement('div');
+        tooltip.className = CLS + '-tooltip';
+        document.body.appendChild(tooltip);
+    }
+    
+    const content = errors.length > 0 
+        ? errors.map(err => ERROR_TYPES[err]?.text || err).join('\n')
+        : `Heading Level ${level}`;
+    
+    tooltip.textContent = content;
+    tooltip.style.left = event.clientX + 10 + 'px';
+    tooltip.style.top = event.clientY - 10 + 'px';
+    tooltip.style.opacity = '1';
+}
+
+function hideTooltip() {
+    const tooltip = document.querySelector('.' + CLS + '-tooltip');
+    if (tooltip) {
+        tooltip.style.opacity = '0';
+    }
+}
+
+// Render heading list
+function renderHeadingList(headings, showOnlyViolations = false) {
+    const content = document.getElementById(CLS + '-content');
+    const displayHeadings = showOnlyViolations 
+        ? headings.filter(h => h.errors.length > 0)
+        : headings;
+    
+    content.innerHTML = '';
+    
+    displayHeadings.forEach(heading => {
+        const { el, level, text, errors } = heading;
+        
+        const item = document.createElement('div');
+        item.className = CLS + '-item';
+        item.style.marginLeft = (level - 1) * 16 + 'px';
+        
+        const badge = document.createElement('span');
+        badge.style.cssText = `
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: ${COLORS[`h${level}`] || '#6b7280'};
+            color: white;
+            text-align: center;
+            line-height: 24px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            flex-shrink: 0;
+        `;
+        badge.textContent = level;
+        
+        const textSpan = document.createElement('span');
+        textSpan.style.cssText = 'flex: 1; margin-left: 8px;';
+        textSpan.textContent = text || '(empty heading)';
+        if (!text) textSpan.style.fontStyle = 'italic';
+        
+        const itemContent = document.createElement('div');
+        itemContent.className = CLS + '-item-content';
+        itemContent.appendChild(badge);
+        itemContent.appendChild(textSpan);
+        
+        if (errors.length > 0) {
+            const errorContainer = document.createElement('div');
+            errorContainer.className = CLS + '-item-errors';
+            
+            errors.forEach(error => {
+                const errorBadge = document.createElement('span');
+                const errorInfo = ERROR_TYPES[error];
+                errorBadge.className = errorInfo?.severity === 'error' 
+                    ? CLS + '-error-badge' 
+                    : CLS + '-warning-badge';
+                errorBadge.textContent = errorInfo?.icon + ' ' + (errorInfo?.text || error);
+                errorContainer.appendChild(errorBadge);
+            });
+            
+            itemContent.appendChild(errorContainer);
+        }
+        
+        item.appendChild(itemContent);
+        
+        // Click to scroll to heading
+        item.addEventListener('click', () => {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // Highlight temporarily
+            const originalOutline = el.style.outline;
+            el.style.outline = '3px solid #7c3aed';
+            el.style.outlineOffset = '4px';
+            
+            setTimeout(() => {
+                el.style.outline = originalOutline;
+                el.style.outlineOffset = '';
+            }, 2000);
+        });
+        
+        content.appendChild(item);
+    });
+}
+
+// Update stats display
+function updateStats(stats, violationCount) {
+    document.getElementById(CLS + '-total').textContent = stats.total;
+    document.getElementById(CLS + '-violation-count').textContent = violationCount;
+    
+    const levelStatsEl = document.getElementById(CLS + '-level-stats');
+    const levelDisplayText = Object.entries(stats.levels)
+        .sort(([a], [b]) => parseInt(a) - parseInt(b))
+        .map(([lvl, cnt]) => `H${lvl}: ${cnt}`)
+        .join(' • ');
+    levelStatsEl.textContent = levelDisplayText;
+}
+
+// Export functionality
+function exportOutline(headings) {
+    const outlineText = headings
+        .map(h => '  '.repeat(h.level - 1) + '• ' + (h.text || '(empty)'))
+        .join('\n');
+    
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(outlineText).then(() => {
+            alert('Heading outline copied to clipboard!');
+        }).catch(() => {
+            fallbackCopy(outlineText);
+        });
+    } else {
+        fallbackCopy(outlineText);
+    }
+}
+
+function fallbackCopy(textContent) {
+    const textArea = document.createElement('textarea');
+    textArea.value = textContent;
+    document.body.appendChild(textArea);
+    textArea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+    alert('Heading outline copied to clipboard!');
+}
+
+// Initialize the inspector
+const result = analyzeHeadings(scanHeadings());
+const { headings, violations, stats } = result;
+
+if (headings.length === 0) {
+    alert('No headings found on this page.');
+    panel.remove();
+    styles.remove();
+    return;
+}
+
+addVisualIndicators(headings);
+renderHeadingList(headings);
+updateStats(stats, violations.length);
+
+// Event listeners
+let showingViolationsOnly = false;
+let indicatorsVisible = true;
+let isDragging = false;
+let dragOffset = { x: 0, y: 0 };
+
+// Make panel draggable
+const headerEl = document.getElementById(CLS + '-header');
+headerEl.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    const rect = panel.getBoundingClientRect();
+    dragOffset.x = e.clientX - rect.left;
+    dragOffset.y = e.clientY - rect.top;
+    
+    document.addEventListener('mousemove', handleDrag);
+    document.addEventListener('mouseup', stopDrag);
+    e.preventDefault();
+});
+
+function handleDrag(e) {
+    if (!isDragging) return;
+    
+    const x = e.clientX - dragOffset.x;
+    const y = e.clientY - dragOffset.y;
+    
+    // Keep panel within viewport
+    const maxX = window.innerWidth - panel.offsetWidth;
+    const maxY = window.innerHeight - panel.offsetHeight;
+    
+    const boundedX = Math.max(0, Math.min(x, maxX));
+    const boundedY = Math.max(0, Math.min(y, maxY));
+    
+    panel.style.left = boundedX + 'px';
+    panel.style.top = boundedY + 'px';
+    panel.style.right = 'auto'; // Remove right positioning when dragging
+}
+
+function stopDrag() {
+    isDragging = false;
+    document.removeEventListener('mousemove', handleDrag);
+    document.removeEventListener('mouseup', stopDrag);
+}
+
+document.getElementById(CLS + '-toggle').addEventListener('click', () => {
+    indicatorsVisible = !indicatorsVisible;
+    
+    if (indicatorsVisible) {
+        document.body.classList.remove(CLS + '-hide');
+    } else {
+        document.body.classList.add(CLS + '-hide');
+    }
+});
+
+document.getElementById(CLS + '-violations').addEventListener('click', () => {
+    showingViolationsOnly = !showingViolationsOnly;
+    renderHeadingList(headings, showingViolationsOnly);
+    
+    const btn = document.getElementById(CLS + '-violations');
+    if (showingViolationsOnly) {
+        btn.style.background = 'rgba(239, 68, 68, 0.8)';
+        btn.textContent = '📋 Show All';
+    } else {
+        btn.style.background = 'rgba(255,255,255,0.2)';
+        btn.textContent = '⚠️ Violations Only';
+    }
+});
+
+document.getElementById(CLS + '-export').addEventListener('click', () => {
+    exportOutline(headings);
+});
+
+document.getElementById(CLS + '-close').addEventListener('click', () => {
+    panel.remove();
+    styles.remove();
+    
+    // Clean up visual indicators
+    document.querySelectorAll('.' + CLS + '-badge').forEach(el => el.remove());
+    document.querySelectorAll('.' + CLS + '-violation').forEach(el => {
+        el.classList.remove(CLS + '-violation');
+    });
+    
+    const tooltip = document.querySelector('.' + CLS + '-tooltip');
+    if (tooltip) tooltip.remove();
+});
+
+// Keyboard shortcut (Alt + Shift + H)
+document.addEventListener('keydown', (e) => {
+    if (e.altKey && e.shiftKey && e.code === 'KeyH') {
+        e.preventDefault();
+        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    }
+});
+
+// Add hover effects to buttons
+document.querySelectorAll('#' + CLS + '-panel button').forEach(btn => {
+    btn.addEventListener('mouseenter', () => {
+        btn.style.transform = 'translateY(-1px)';
+        btn.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
+    });
+    
+    btn.addEventListener('mouseleave', () => {
+        btn.style.transform = '';
+        btn.style.boxShadow = '';
+    });
+});
+
+})();
