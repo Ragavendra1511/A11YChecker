@@ -1,0 +1,764 @@
+javascript:(function(){
+const JSON_URL = 'https://raw.githubusercontent.com/Ragavendra1511/a11y/main/test2-1.4.3.json';
+const BUTTON_ID = '__wcag_floating_button';
+const OVERLAY_ID = '__wcag_overlay_tool';
+
+// Remove existing button if present
+const existingButton = document.getElementById(BUTTON_ID);
+if (existingButton) {
+    existingButton.remove();
+    const existingOverlay = document.getElementById(OVERLAY_ID);
+    if (existingOverlay) existingOverlay.remove();
+    return;
+}
+
+// Create floating button
+const floatingButton = document.createElement('div');
+floatingButton.id = BUTTON_ID;
+
+// Create button content safely without innerHTML
+const searchIcon = document.createElement('div');
+searchIcon.textContent = '🔍';
+const wcagText = document.createElement('div');
+wcagText.textContent = 'WCAG';
+floatingButton.appendChild(searchIcon);
+floatingButton.appendChild(wcagText);
+
+floatingButton.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 60px;
+    height: 60px;
+    background: linear-gradient(135deg, #000000, #4a4444ff);
+    color: white;
+    border: 2px solid #FFFFFF;
+    border-radius: 50%;
+    cursor: pointer;
+    z-index: 999999999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    box-shadow: 0 4px 20px rgba(0, 124, 186, 0.4);
+    transition: all 0.3s ease;
+    user-select: none;
+    line-height: 1.1;
+    text-align: center;
+`;
+
+// Add hover effects
+floatingButton.addEventListener('mouseenter', function() {
+    this.style.transform = 'scale(1.1)';
+    this.style.boxShadow = '0 6px 25px rgba(0, 124, 186, 0.6)';
+});
+
+floatingButton.addEventListener('mouseleave', function() {
+    this.style.transform = 'scale(1)';
+    this.style.boxShadow = '0 4px 20px rgba(0, 124, 186, 0.4)';
+});
+
+// Make button draggable
+let isDragging = false;
+let startX, startY, startRight, startBottom;
+
+floatingButton.addEventListener('mousedown', function(e) {
+    isDragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = this.getBoundingClientRect();
+    startRight = window.innerWidth - rect.right;
+    startBottom = window.innerHeight - rect.bottom;
+    this.style.cursor = 'grabbing';
+});
+
+document.addEventListener('mousemove', function(e) {
+    if (!isDragging) return;
+    const deltaX = startX - e.clientX;
+    const deltaY = e.clientY - startY;
+    
+    const newRight = Math.max(0, Math.min(window.innerWidth - 60, startRight + deltaX));
+    const newBottom = Math.max(0, Math.min(window.innerHeight - 60, startBottom - deltaY));
+    
+    floatingButton.style.right = newRight + 'px';
+    floatingButton.style.bottom = newBottom + 'px';
+});
+
+document.addEventListener('mouseup', function() {
+    if (isDragging) {
+        isDragging = false;
+        floatingButton.style.cursor = 'pointer';
+    }
+});
+
+// Click handler for the floating button
+floatingButton.addEventListener('click', function(e) {
+    if (isDragging) return; // Don't trigger on drag
+    
+    const input = prompt('Enter WCAG SC number (e.g., 2.1.1, 1.4.3):');
+    if (!input) return;
+    
+    loadWCAGData(input.trim());
+});
+
+// Global variables for search functionality
+let currentMatches = [];
+let currentSearchTerm = '';
+let overlayKeyHandler = null;
+
+// Load and process WCAG data
+function loadWCAGData(searchTerm) {
+    // Show loading state
+    const originalIcon = floatingButton.children[0].textContent;
+    const originalText = floatingButton.children[1].textContent;
+    floatingButton.children[0].textContent = '⏳';
+    floatingButton.children[1].textContent = 'Loading';
+    
+    fetch(JSON_URL)
+        .then(res => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+        })
+        .then(DATA => {
+            floatingButton.children[0].textContent = originalIcon;
+            floatingButton.children[1].textContent = originalText;
+            
+            // Find matching entries
+            const entries = Object.values(DATA);
+            const matches = [];
+
+            for (let entry of entries) {
+                if (!entry) continue;
+
+                const fields = [
+                    entry.Compliance_Check,
+                    entry.compliance_check,
+                    entry.SC,
+                    entry.sc,
+                    entry.success_criteria,
+                    entry.Issue_Title,
+                    entry.issue_title,
+                    entry.title,
+                    entry.number,
+                    entry.id
+                ].filter(f => f);
+
+                const isMatch = fields.some(field => {
+                    const fieldStr = String(field).toLowerCase();
+                    const inputStr = searchTerm.toLowerCase();
+                    return fieldStr.includes(inputStr) ||
+                        fieldStr === inputStr ||
+                        fieldStr.endsWith(inputStr) ||
+                        inputStr.includes(fieldStr);
+                });
+
+                if (isMatch) {
+                    matches.push(entry);
+                }
+            }
+
+            if (matches.length === 0) {
+                const available = entries.slice(0, 10).map((entry, idx) => {
+                    const identifier = entry.Compliance_Check ||
+                        entry.compliance_check ||
+                        entry.SC ||
+                        entry.sc ||
+                        entry.Issue_Title ||
+                        entry.issue_title ||
+                        `Entry ${idx}`;
+                    return identifier;
+                });
+
+                alert(`No match found for "${searchTerm}"\n\nAvailable entries (first 10):\n${available.join('\n')}`);
+                return;
+            }
+
+            currentMatches = matches;
+            currentSearchTerm = searchTerm;
+            showOverlay(searchTerm, matches);
+        })
+        .catch(err => {
+            floatingButton.children[0].textContent = originalIcon;
+            floatingButton.children[1].textContent = originalText;
+            console.error('WCAG Tool Error:', err);
+            alert(`Failed to load WCAG data: ${err.message}\n\nPlease check your internet connection.`);
+        });
+}
+
+// Enhanced function to format recommendation content
+function formatRecommendation(recField) {
+    if (!recField) return 'No recommendation available';
+
+    if (typeof recField === 'string') {
+        return recField;
+    }
+
+    if (typeof recField === 'object') {
+        let formattedRec = '';
+
+        Object.keys(recField).forEach(key => {
+            const value = recField[key];
+
+            if (Array.isArray(value)) {
+                if (key === '' || key === 'recommendations' || key === 'steps') {
+                    formattedRec += value.map((item, idx) => `${idx + 1}. ${item}`).join('\n') + '\n\n';
+                } else if (key === 'Techniques') {
+                    formattedRec += `**${key}:**\n${value.map(item => `• ${item}`).join('\n')}\n\n`;
+                } else {
+                    formattedRec += `**${key}:**\n${value.map(item => `• ${item}`).join('\n')}\n\n`;
+                }
+            } else if (typeof value === 'string') {
+                if (key === 'WCAG_Reference') {
+                    formattedRec += `**Reference:** ${value}\n\n`;
+                } else if (key !== '') {
+                    formattedRec += `**${key}:** ${value}\n\n`;
+                }
+            }
+        });
+
+        return formattedRec.trim() || 'Recommendation structure available but content could not be parsed';
+    }
+
+    return String(recField);
+}
+
+// Helper function to create text element safely
+function createTextElement(tag, text, styles = '') {
+    const element = document.createElement(tag);
+    element.textContent = text;
+    if (styles) element.style.cssText = styles;
+    return element;
+}
+
+// Helper function to create styled recommendation lines
+function createRecommendationLine(line) {
+    const lineDiv = document.createElement('div');
+    lineDiv.style.cssText = 'margin-bottom: 8px;';
+
+    if (line.startsWith('**') && line.endsWith(':**')) {
+        lineDiv.style.cssText += 'font-weight: bold; color: #007cba; margin: 15px 0 8px 0;';
+        lineDiv.textContent = line.replace(/\*\*/g, '');
+    } else if (line.match(/^\d+\./)) {
+        lineDiv.style.cssText += 'margin-left: 0px; color: #495057;';
+        const numberSpan = document.createElement('span');
+        numberSpan.style.cssText = 'color: #007cba; font-weight: bold;';
+        numberSpan.textContent = line.match(/^\d+\./)[0];
+        const textSpan = document.createElement('span');
+        textSpan.textContent = ' ' + line.replace(/^\d+\./, '').trim();
+        lineDiv.appendChild(numberSpan);
+        lineDiv.appendChild(textSpan);
+    } else if (line.startsWith('•')) {
+        lineDiv.style.cssText += 'margin-left: 20px; color: #6c757d;';
+        lineDiv.textContent = line;
+    } else {
+        lineDiv.textContent = line;
+    }
+
+    return lineDiv;
+}
+
+// Search functionality
+function highlightSearchTerm(text, searchTerm) {
+    if (!searchTerm || !text) return text;
+    
+    const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    return text.replace(regex, '<mark style="background: #ffeb3b; padding: 2px 4px; border-radius: 2px;">$1</mark>');
+}
+
+function performSearch(searchQuery) {
+    const allIssues = document.querySelectorAll('[data-issue-index]');
+    let visibleCount = 0;
+    
+    if (!searchQuery.trim()) {
+        // Show all issues if search is empty
+        allIssues.forEach(issue => {
+            issue.style.display = 'block';
+            // Remove highlights
+            const highlighted = issue.querySelectorAll('mark');
+            highlighted.forEach(mark => {
+                const parent = mark.parentNode;
+                parent.replaceChild(document.createTextNode(mark.textContent), mark);
+                parent.normalize();
+            });
+        });
+        updateSearchResults(allIssues.length, allIssues.length);
+        return;
+    }
+    
+    const query = searchQuery.toLowerCase();
+    
+    allIssues.forEach(issue => {
+        const issueIndex = parseInt(issue.getAttribute('data-issue-index'));
+        const match = currentMatches[issueIndex];
+        
+        if (!match) {
+            issue.style.display = 'none';
+            return;
+        }
+        
+        // Search in title, description, and recommendation
+        const title = (match.Issue_Title || match.issue_title || match.title || '').toLowerCase();
+        const description = (match.Issue_Description || match.issue_description || match.description || '').toLowerCase();
+        const recField = match.Recommendation || match.recommendation || match.solution;
+        const recommendation = formatRecommendation(recField).toLowerCase();
+        
+        const isMatch = title.includes(query) || 
+                       description.includes(query) || 
+                       recommendation.includes(query);
+        
+        if (isMatch) {
+            issue.style.display = 'block';
+            visibleCount++;
+            
+            // Highlight matches in the displayed content
+            const titleElement = issue.querySelector('[data-field="title"]');
+            const descElement = issue.querySelector('[data-field="description"]');
+            const recElement = issue.querySelector('[data-field="recommendation"]');
+            
+            if (titleElement) {
+                const originalTitle = match.Issue_Title || match.issue_title || match.title || `Issue ${issueIndex + 1}`;
+                titleElement.innerHTML = highlightSearchTerm(originalTitle, searchQuery);
+            }
+            
+            if (descElement) {
+                const originalDesc = match.Issue_Description || match.issue_description || match.description || 'No description available';
+                descElement.innerHTML = highlightSearchTerm(originalDesc, searchQuery);
+            }
+            
+            if (recElement) {
+                const originalRec = formatRecommendation(recField);
+                recElement.innerHTML = highlightSearchTerm(originalRec, searchQuery);
+            }
+        } else {
+            issue.style.display = 'none';
+        }
+    });
+    
+    updateSearchResults(visibleCount, allIssues.length);
+}
+
+function updateSearchResults(visible, total) {
+    const resultsSpan = document.getElementById('search-results');
+    if (resultsSpan) {
+        resultsSpan.textContent = visible === total ? 
+            `Showing all ${total} issues` : 
+            `Showing ${visible} of ${total} issues`;
+    }
+}
+
+function showOverlay(searchTerm, matches) {
+    const existing = document.getElementById(OVERLAY_ID);
+    if (existing) existing.remove();
+
+    // Create overlay container
+    const overlay = document.createElement('div');
+    overlay.id = OVERLAY_ID;
+    overlay.style.cssText = `
+        position: fixed;
+        top: 5%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #fff;
+        border: 3px solid #007cba;
+        padding: 0;
+        z-index: 999999998;
+        color: #333;
+        font-size: 14px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        max-width: 900px;
+        width: 95vw;
+        border-radius: 12px;
+        max-height: 90vh;
+        line-height: 1.5;
+        transition: all 0.3s ease;
+        pointer-events: auto;
+    `;
+
+    // Create title bar
+    const titleBar = document.createElement('div');
+    titleBar.style.cssText = `
+        background: #007cba;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 9px 9px 0 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        cursor: move;
+        user-select: none;
+    `;
+
+    const titleText = createTextElement('h3', `WCAG ${searchTerm} - Found ${matches.length} issue${matches.length > 1 ? 's' : ''}`, 'margin: 0; font-size: 16px; flex: 1;');
+
+    const buttonGroup = document.createElement('div');
+    buttonGroup.style.cssText = 'display: flex; gap: 8px;';
+
+    const copyBtn = createTextElement('button', '📋 Copy', 'background: rgba(255,255,255,0.2); color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;');
+    const toggleBtn = createTextElement('button', '➖', 'background: rgba(255,255,255,0.2); color: white; border: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;');
+    const closeBtn = createTextElement('button', '❌', 'background: rgba(255,255,255,0.2); color: white; border: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;');
+
+    buttonGroup.appendChild(copyBtn);
+    buttonGroup.appendChild(toggleBtn);
+    buttonGroup.appendChild(closeBtn);
+
+    titleBar.appendChild(titleText);
+    titleBar.appendChild(buttonGroup);
+
+    // Create search bar
+    const searchBar = document.createElement('div');
+    searchBar.id = 'search-bar';
+    searchBar.style.cssText = `
+        background: #f8f9fa;
+        padding: 15px 20px;
+        border-bottom: 1px solid #e9ecef;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    `;
+
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Search in issues... (Ctrl+F)';
+    searchInput.style.cssText = `
+        flex: 1;
+        padding: 8px 12px;
+        border: 2px solid #e9ecef;
+        border-radius: 6px;
+        font-size: 14px;
+        outline: none;
+        transition: border-color 0.2s ease;
+    `;
+
+    const clearBtn = createTextElement('button', '✕', `
+        background: #6c757d;
+        color: white;
+        border: none;
+        padding: 8px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        opacity: 0.7;
+        transition: opacity 0.2s ease;
+    `);
+
+    const searchResults = createTextElement('span', `Showing all ${matches.length} issues`, 'font-size: 12px; color: #6c757d; white-space: nowrap;');
+    searchResults.id = 'search-results';
+
+    searchBar.appendChild(searchInput);
+    searchBar.appendChild(clearBtn);
+    searchBar.appendChild(searchResults);
+
+    // Create content container
+    const contentContainer = document.createElement('div');
+    contentContainer.id = 'content-container';
+    contentContainer.style.cssText = 'padding: 25px; overflow-y: auto; max-height: calc(70vh - 120px);';
+
+    const contentDiv = document.createElement('div');
+
+    // Process each match
+    matches.forEach((match, index) => {
+        const issueDiv = document.createElement('div');
+        issueDiv.setAttribute('data-issue-index', index);
+        issueDiv.style.cssText = `
+            margin-bottom: 30px;
+            padding: 20px;
+            background: ${index % 2 === 0 ? '#f8f9fa' : '#ffffff'};
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            border-left: 4px solid #007cba;
+        `;
+
+        // Issue title and severity
+        const issueHeader = document.createElement('div');
+        issueHeader.style.cssText = 'margin-bottom: 15px;';
+
+        const title = match.Issue_Title || match.issue_title || match.title || `Issue ${index + 1}`;
+        const issueTitle = createTextElement('h4', `${index + 1}. ${title}`, 'margin: 0 0 5px 0; color: #495057; font-size: 16px; font-weight: 600;');
+        issueTitle.setAttribute('data-field', 'title');
+
+        const severity = match.Issue_Severity || match.issue_severity || match.severity;
+        if (severity) {
+            const severitySpan = createTextElement('span', severity, `
+                display: inline-block;
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: bold;
+                margin-left: 10px;
+                background: ${severity.toLowerCase() === 'high' ? '#dc3545' :
+                    severity.toLowerCase() === 'medium' ? '#ffc107' : '#28a745'};
+                color: white;
+            `);
+            issueHeader.appendChild(issueTitle);
+            issueHeader.appendChild(severitySpan);
+        } else {
+            issueHeader.appendChild(issueTitle);
+        }
+
+        issueDiv.appendChild(issueHeader);
+
+        // Compliance check
+        const compliance = match.Compliance_Check || match.compliance_check || match.SC || match.sc;
+        if (compliance) {
+            const complianceDiv = document.createElement('div');
+            complianceDiv.style.cssText = 'margin-bottom: 15px; font-size: 13px;';
+
+            const complianceLabel = createTextElement('strong', 'Compliance Check: ', 'color: #6c757d;');
+            const complianceText = createTextElement('span', compliance, 'background: #e9ecef; padding: 2px 6px; border-radius: 3px;');
+
+            complianceDiv.appendChild(complianceLabel);
+            complianceDiv.appendChild(complianceText);
+            issueDiv.appendChild(complianceDiv);
+        }
+
+        // Description section
+        const descDiv = document.createElement('div');
+        descDiv.style.cssText = 'margin-bottom: 20px;';
+
+        const descLabel = createTextElement('strong', 'Description: ', 'color: #495057;');
+        const descText = document.createElement('div');
+        descText.style.cssText = 'margin-top: 5px; padding: 10px; background: rgba(108, 117, 125, 0.1); border-radius: 4px;';
+        descText.setAttribute('data-field', 'description');
+        const description = match.Issue_Description || match.issue_description || match.description || 'No description available';
+        descText.textContent = description;
+
+        descDiv.appendChild(descLabel);
+        descDiv.appendChild(descText);
+        issueDiv.appendChild(descDiv);
+
+        // Recommendation section
+        const recDiv = document.createElement('div');
+        recDiv.style.cssText = 'padding: 15px; background: rgba(0, 124, 186, 0.05); border: 1px solid rgba(0, 124, 186, 0.2); border-radius: 6px;';
+
+        const recLabel = createTextElement('strong', 'Recommendation:', 'color: #007cba; display: block; margin-bottom: 10px;');
+
+        const recContent = document.createElement('div');
+        recContent.style.cssText = 'line-height: 1.6;';
+        recContent.setAttribute('data-field', 'recommendation');
+
+        const recField = match.Recommendation || match.recommendation || match.solution;
+        const formattedRecommendation = formatRecommendation(recField);
+
+        const lines = formattedRecommendation.split('\n');
+        lines.forEach(line => {
+            if (line.trim()) {
+                const lineElement = createRecommendationLine(line);
+                recContent.appendChild(lineElement);
+            }
+        });
+
+        recDiv.appendChild(recLabel);
+        recDiv.appendChild(recContent);
+
+        // Example fix if available
+        if (match.Example_Fix || match.example_fix) {
+            const exampleDiv = document.createElement('div');
+            exampleDiv.style.cssText = 'margin-top: 15px; padding: 10px; background: #f8f9fa; border-left: 3px solid #28a745; border-radius: 0 4px 4px 0;';
+
+            const exampleLabel = createTextElement('strong', 'Example Fix: ', 'color: #28a745;');
+            const exampleCode = createTextElement('code', match.Example_Fix || match.example_fix, 'background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-family: monospace; display: block; margin-top: 5px; white-space: pre-wrap;');
+
+            exampleDiv.appendChild(exampleLabel);
+            exampleDiv.appendChild(exampleCode);
+            recDiv.appendChild(exampleDiv);
+        }
+
+        issueDiv.appendChild(recDiv);
+        contentDiv.appendChild(issueDiv);
+    });
+
+    contentContainer.appendChild(contentDiv);
+
+    // Assemble overlay
+    overlay.appendChild(titleBar);
+    overlay.appendChild(searchBar);
+    overlay.appendChild(contentContainer);
+
+    document.body.appendChild(overlay);
+
+    // Search functionality event handlers
+    searchInput.addEventListener('input', function() {
+        performSearch(this.value);
+    });
+
+    searchInput.addEventListener('focus', function() {
+        this.style.borderColor = '#007cba';
+    });
+
+    searchInput.addEventListener('blur', function() {
+        this.style.borderColor = '#e9ecef';
+    });
+
+    clearBtn.addEventListener('click', function() {
+        searchInput.value = '';
+        performSearch('');
+        searchInput.focus();
+    });
+
+    clearBtn.addEventListener('mouseenter', function() {
+        this.style.opacity = '1';
+    });
+
+    clearBtn.addEventListener('mouseleave', function() {
+        this.style.opacity = '0.7';
+    });
+
+    // Keyboard shortcut handler
+    overlayKeyHandler = function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            e.preventDefault();
+            searchInput.focus();
+            searchInput.select();
+        }
+        if (e.key === 'Escape') {
+            if (document.activeElement === searchInput && searchInput.value) {
+                searchInput.value = '';
+                performSearch('');
+            } else {
+                overlay.remove();
+                if (overlayKeyHandler) {
+                    document.removeEventListener('keydown', overlayKeyHandler);
+                    overlayKeyHandler = null;
+                }
+            }
+        }
+    };
+
+    document.addEventListener('keydown', overlayKeyHandler);
+
+    // Event handlers
+    let isMinimized = false;
+
+    toggleBtn.addEventListener('click', function() {
+        isMinimized = !isMinimized;
+        if (isMinimized) {
+            searchBar.style.display = 'none';
+            contentContainer.style.display = 'none';
+            overlay.style.width = '400px';
+            overlay.style.maxWidth = '400px';
+            toggleBtn.textContent = '➕';
+            titleText.textContent = `WCAG ${searchTerm} - Minimized`;
+        } else {
+            searchBar.style.display = 'flex';
+            contentContainer.style.display = 'block';
+            overlay.style.width = '95vw';
+            overlay.style.maxWidth = '900px';
+            toggleBtn.textContent = '➖';
+            titleText.textContent = `WCAG ${searchTerm} - Found ${matches.length} issue${matches.length > 1 ? 's' : ''}`;
+        }
+    });
+
+    copyBtn.addEventListener('click', function() {
+        let textToCopy = `WCAG ${searchTerm} - ${matches.length} Recommendation${matches.length > 1 ? 's' : ''}\n\n`;
+
+        matches.forEach((match, index) => {
+            const title = match.Issue_Title || match.issue_title || match.title || `Issue ${index + 1}`;
+            const description = match.Issue_Description || match.issue_description || match.description;
+            const recField = match.Recommendation || match.recommendation || match.solution;
+            const recommendation = formatRecommendation(recField);
+
+            textToCopy += `${index + 1}. ${title}\n\n`;
+            if (description) textToCopy += `Description: ${description}\n\n`;
+            textToCopy += `Recommendation:\n${recommendation}\n\n`;
+            textToCopy += `${'='.repeat(60)}\n\n`;
+        });
+
+        copyToClipboard(textToCopy, this, '✅ Copied!', '📋 Copy');
+    });
+
+    closeBtn.addEventListener('click', function() {
+        overlay.remove();
+        if (overlayKeyHandler) {
+            document.removeEventListener('keydown', overlayKeyHandler);
+            overlayKeyHandler = null;
+        }
+    });
+
+    // Make overlay draggable
+    let overlayDragging = false;
+    let overlayStartX, overlayStartY, overlayStartLeft, overlayStartTop;
+
+    titleBar.addEventListener('mousedown', function(e) {
+        if (e.target.tagName === 'BUTTON') return;
+        overlayDragging = true;
+        overlayStartX = e.clientX;
+        overlayStartY = e.clientY;
+        const rect = overlay.getBoundingClientRect();
+        overlayStartLeft = rect.left;
+        overlayStartTop = rect.top;
+        titleBar.style.cursor = 'grabbing';
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (!overlayDragging) return;
+        const deltaX = e.clientX - overlayStartX;
+        const deltaY = e.clientY - overlayStartY;
+        overlay.style.left = (overlayStartLeft + deltaX) + 'px';
+        overlay.style.top = (overlayStartTop + deltaY) + 'px';
+        overlay.style.transform = 'none';
+    });
+
+    document.addEventListener('mouseup', function() {
+        if (overlayDragging) {
+            overlayDragging = false;
+            titleBar.style.cursor = 'move';
+        }
+    });
+
+    // Focus search input initially
+    setTimeout(() => searchInput.focus(), 100);
+}
+
+function copyToClipboard(text, button, successText, originalText) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+            button.textContent = successText;
+            button.style.background = '#28a745';
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.style.background = 'rgba(255,255,255,0.2)';
+            }, 2000);
+        }).catch(() => fallbackCopy(text, button, successText, originalText));
+    } else {
+        fallbackCopy(text, button, successText, originalText);
+    }
+}
+
+function fallbackCopy(text, button, successText, originalText) {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.cssText = 'position: fixed; opacity: 0; pointer-events: none;';
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+        document.execCommand('copy');
+        button.textContent = successText;
+        button.style.background = '#28a745';
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.style.background = 'rgba(255,255,255,0.2)';
+        }, 2000);
+    } catch (err) {
+        button.textContent = '❌ Copy failed';
+        setTimeout(() => button.textContent = originalText, 2000);
+    }
+    document.body.removeChild(textArea);
+}
+
+// Add the floating button to the page
+document.body.appendChild(floatingButton);
+
+// Success message
+console.log('🔍 WCAG Floating Button Tool Activated!');
+console.log('Click the floating button in the bottom-right corner to lookup WCAG success criteria.');
+console.log('📋 New Features:');
+console.log('  • Search field in overlay to filter results');
+console.log('  • Press Ctrl+F (or Cmd+F on Mac) to quickly focus search');
+console.log('  • Search works across issue titles, descriptions, and recommendations');
+console.log('  • Results are highlighted and filtered in real-time');
+
+})();
