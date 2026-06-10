@@ -1,0 +1,66 @@
+javascript:(function(){
+  var sel=window.getSelection?window.getSelection().toString().trim():(document.selection?document.selection.createRange().text.trim():'');
+  if(!sel){alert('Please select some text first, then click the bookmarklet.');return;}
+  var APIKEY='YOUR-GEMINI-API-KEY';
+  var MODEL='gemini-2.5-flash-lite';
+  var overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:2147483647;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;';
+  var card=document.createElement('div');
+  card.style.cssText='background:#fff;border-radius:16px;padding:28px 28px 24px;max-width:480px;width:calc(100vw - 48px);box-shadow:0 24px 80px rgba(0,0,0,0.22);position:relative;';
+  var close=document.createElement('button');
+  close.innerHTML='&times;';
+  close.style.cssText='position:absolute;top:14px;right:16px;background:none;border:none;font-size:22px;color:#888;cursor:pointer;padding:4px 8px;border-radius:6px;';
+  close.onclick=function(){document.body.removeChild(overlay);};
+  overlay.addEventListener('click',function(e){if(e.target===overlay)document.body.removeChild(overlay);});
+  var title=document.createElement('h2');
+  title.textContent='English Helper';
+  title.style.cssText='font-size:18px;font-weight:700;color:#1a1a18;margin:0 0 6px;';
+  var preview=document.createElement('div');
+  preview.style.cssText='background:#f5f4f0;border-radius:8px;padding:10px 14px;font-size:13px;color:#444;margin-bottom:18px;line-height:1.5;word-break:break-word;';
+  preview.textContent='"'+(sel.length>80?sel.substring(0,80)+'…':sel)+'"';
+  var btnRow=document.createElement('div');
+  btnRow.style.cssText='display:flex;gap:12px;';
+  function mkBtn(label,primary){
+    var b=document.createElement('button');
+    b.textContent=label;
+    b.style.cssText='flex:1;padding:13px 10px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;border:1.5px solid '+(primary?'#534ab7':'#d3d1c7')+';background:'+(primary?'#534ab7':'#fff')+';color:'+(primary?'#fff':'#1a1a18')+';';
+    return b;
+  }
+  var dictBtn=mkBtn('📚 Dictionary',true);
+  var plainBtn=mkBtn('✏️ Plain English',false);
+  var resultBox=document.createElement('div');
+  resultBox.style.cssText='margin-top:18px;padding:14px;background:#f8f7f3;border-radius:10px;font-size:14px;color:#1a1a18;line-height:1.7;display:none;word-break:break-word;white-space:pre-wrap;max-height:300px;overflow-y:auto;';
+  var spinner=document.createElement('div');
+  spinner.style.cssText='display:none;text-align:center;margin-top:16px;font-size:13px;color:#888;';
+  spinner.textContent='Thinking…';
+  function callGemini(prompt){
+    spinner.style.display='block';
+    resultBox.style.display='none';
+    dictBtn.disabled=true;plainBtn.disabled=true;
+    fetch('https://generativelanguage.googleapis.com/v1beta/models/'+MODEL+':generateContent?key='+APIKEY,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({contents:[{parts:[{text:prompt}]}]})
+    })
+    .then(function(r){return r.json();})
+    .then(function(d){
+      spinner.style.display='none';
+      dictBtn.disabled=false;plainBtn.disabled=false;
+      if(d.error){resultBox.textContent='API Error: '+d.error.message;resultBox.style.display='block';return;}
+      var text=d&&d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts&&d.candidates[0].content.parts[0]&&d.candidates[0].content.parts[0].text;
+      resultBox.textContent=text||'No response text. Raw: '+JSON.stringify(d).substring(0,200);
+      resultBox.style.display='block';
+    })
+    .catch(function(e){
+      spinner.style.display='none';
+      dictBtn.disabled=false;plainBtn.disabled=false;
+      resultBox.textContent='Network error: '+e.message;
+      resultBox.style.display='block';
+    });
+  }
+  dictBtn.onclick=function(){callGemini('You are a helpful English dictionary for non-native speakers. The user selected: "'+sel+'". Give: 1) Simple meaning, 2) Part of speech, 3) Example sentence, 4) If idiom/phrase, explain its real meaning. Keep it simple and friendly.');};
+  plainBtn.onclick=function(){callGemini('You are a plain language editor. Your task is to rewrite the provided text so it meets WCAG 3.1.5 Reading Level compliance (Level AAA).\n\n## Target Reading Level\nRewrite the content so it requires no more than a lower secondary education level (approximately 7-9 years of schooling). Use readability tools like the Flesch-Kincaid scale as a guide — aim for Grade 6-8 or below.\n\n## Rules to Follow\n### Language & Sentences\n- Use short, common, everyday words — replace long or unfamiliar words with simpler alternatives without changing the meaning\n- Keep sentences short — no longer than 25 words per sentence\n- Use no more than two conjunctions per sentence (e.g., and, but, or)\n- Remove redundant words — every word should add meaning\n- Avoid complex phrases that can be replaced with simpler ones\n\n### Structure & Clarity\n- Break long paragraphs into shorter ones\n- Use active voice wherever possible\n- Introduce one idea per sentence\n- Use clear, descriptive headings and subheadings\n\n### What NOT to Change\n- Proper names (people, cities, organizations) — leave as-is\n- Titles of documents, books, articles, movies — leave as-is\n- Technical terms that cannot be replaced — keep them, but briefly explain them in plain language the first time they appear\n\n### Preservation Requirements\n- Preserve all original meaning and factual accuracy\n- Do not omit important information\n- If a concept is too complex to simplify fully, add a 1-2 sentence plain-language summary before or after it\n\n## Output Format\nReturn:\n1. Rewritten Text — the simplified version\n2. Changes Summary — a brief bullet list of the main changes made\n\nHere is the text to rewrite:\n"'+sel+'"');};
+  btnRow.appendChild(dictBtn);btnRow.appendChild(plainBtn);
+  card.appendChild(close);card.appendChild(title);card.appendChild(preview);card.appendChild(btnRow);card.appendChild(spinner);card.appendChild(resultBox);
+  overlay.appendChild(card);document.body.appendChild(overlay);
+})();
