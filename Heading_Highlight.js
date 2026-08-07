@@ -1,4 +1,4 @@
- (function () {
+(function () {
   // Toggle: if already running, cleanup and return
   if (window.__a11yHeadingOverlay) {
     window.__a11yHeadingOverlay.cleanup();
@@ -10,6 +10,12 @@
   const lastFocusedBeforeOpen = document.activeElement;
 
   const CSS = `
+  /* Highlight all original headings with a red border */
+  h1, h2, h3, h4, h5, h6, [role="heading"] {
+    outline: 2px solid #ef4444 !important;
+    outline-offset: 2px !important;
+  }
+
   .a11y-heading-badge {
     display: inline-flex;
     align-items: center;
@@ -36,10 +42,9 @@
   .a11y-heading-badge.a11y-badge-warn:hover { background: #8f1414; }
 
   .a11y-heading-highlight {
-    outline: 0;
-    box-shadow:
-      inset 4px 0 0 0 #ff8c00,
-      0 0 0 3px rgba(255,165,0,0.15);
+    outline: 3px solid #ff8c00 !important;
+    outline-offset: 2px !important;
+    box-shadow: inset 4px 0 0 0 #ff8c00, 0 0 0 3px rgba(255,165,0,0.15);
     background: rgba(255,245,230,0.35);
     transition: box-shadow 0.18s ease, background 0.18s ease;
   }
@@ -366,7 +371,7 @@
   const toolbar = createEl('div');
   toolbar.className = 'a11y-panel-toolbar';
   const refreshBtn = createEl('button', { type: 'button' }); refreshBtn.className = 'a11y-btn'; refreshBtn.textContent = '↻ Refresh';
-  const toggleObs = createEl('button', { type: 'button', 'aria-pressed': 'false' }); toggleObs.className = 'a11y-btn'; 
+  const toggleObs = createEl('button', { type: 'button', 'aria-pressed': 'false' }); toggleObs.className = 'a11y-btn'; toggleObs.style.display = 'none';
   const prevBtn = createEl('button', { type: 'button', 'aria-label': 'Jump to previous heading' }); prevBtn.className = 'a11y-btn'; prevBtn.textContent = '↑ Prev';
   const nextBtn = createEl('button', { type: 'button', 'aria-label': 'Jump to next heading' }); nextBtn.className = 'a11y-btn'; nextBtn.textContent = '↓ Next';
   const exportBtn = createEl('button', { type: 'button' }); exportBtn.className = 'a11y-btn'; exportBtn.textContent = '⧉ Copy outline';
@@ -473,8 +478,7 @@
         focusHeading(el);
         setActiveListItem(idx);
       });
-      // Insert inline as the heading's first child instead of floating it
-      // over the page, so it moves with normal layout/scroll for free.
+
       el.insertBefore(badge, el.firstChild);
       state.badges.push(badge);
 
@@ -529,9 +533,6 @@
   // ---------- Controls ----------
   refreshBtn.addEventListener('click', () => { render(); });
 
-  // Badges now live inside the page's own headings, so the observer would
-  // otherwise see our own inserted/removed badge nodes as page changes and
-  // re-trigger itself. Disconnect while we render, then reconnect.
   let obsOn = false;
   function startObserving() {
     state.obs = new MutationObserver(() => {
